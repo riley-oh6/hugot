@@ -10,7 +10,6 @@ import (
 
 // FeatureExtractionPipeline A feature extraction pipeline is a go version of
 // https://github.com/huggingface/transformers/blob/main/src/transformers/pipelines/feature_extraction.py
-
 type FeatureExtractionPipeline struct {
 	BasePipeline
 }
@@ -27,7 +26,7 @@ func (t *FeatureExtractionOutput) GetOutput() []any {
 	return out
 }
 
-// NewFeatureExtractionPipeline Initialize a feature extraction pipeline
+// NewFeatureExtractionPipeline Initialize a feature extraction pipeline.
 func NewFeatureExtractionPipeline(config PipelineConfig[*FeatureExtractionPipeline], ortOptions *ort.SessionOptions) (*FeatureExtractionPipeline, error) {
 	pipeline := &FeatureExtractionPipeline{}
 	pipeline.ModelPath = config.ModelPath
@@ -69,7 +68,6 @@ func (p *FeatureExtractionPipeline) Validate() error {
 
 // Postprocess Parse the results of the forward pass into the output. Token embeddings are mean pooled.
 func (p *FeatureExtractionPipeline) Postprocess(batch PipelineBatch) (*FeatureExtractionOutput, error) {
-
 	maxSequence := batch.MaxSequence
 	vectorCounter := 0
 	tokenCounter := 0
@@ -100,7 +98,6 @@ func (p *FeatureExtractionPipeline) Postprocess(batch PipelineBatch) (*FeatureEx
 }
 
 func meanPooling(tokens [][]float32, input TokenizedInput, maxSequence int, dimensions int) []float32 {
-
 	length := len(input.AttentionMask)
 	vector := make([]float32, dimensions)
 	for j := 0; j < maxSequence; j++ {

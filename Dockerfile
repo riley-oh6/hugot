@@ -33,7 +33,7 @@ RUN dnf -y install gcc jq bash tar xz gzip glibc-static libstdc++ wget zip git &
 RUN curl -LO https://golang.org/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
     tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz && \
     rm go${GO_VERSION}.linux-amd64.tar.gz
-ENV PATH="$PATH:/usr/local/go/bin"
+ENV PATH="$PATH:/usr/local/go/bin:/home/testuser/go/bin"
 
 # tokenizer
 COPY --from=tokenizer /tokenizers/target/release/libtokenizers.a /usr/lib/libtokenizers.a

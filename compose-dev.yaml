@@ -8,6 +8,8 @@ services:
     volumes:
       - $src_dir:/home/testuser/repositories/hugot
     entrypoint: ["tail", "-f", "/dev/null"]
+    ports:
+      - 8888:8888 # for the tutorials
     deploy:
       resources:
         reservations:
