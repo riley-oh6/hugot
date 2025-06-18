@@ -159,7 +159,13 @@ func createInputTensorsGoMLX(batch *PipelineBatch, inputsMeta []InputOutputInfo,
 					case "attention_mask":
 						backingSlice[counter] = int64(input.AttentionMask[k])
 					default:
+<<<<<<< Updated upstream
 						return fmt.Errorf("input %s not recognized!!!!!!!!!! a", inputMeta.Name)
+=======
+						// TODO skip this temp
+						continue
+						return fmt.Errorf("input %s not recognized", inputMeta.Name)
+>>>>>>> Stashed changes
 					}
 				} else {
 					backingSlice[counter] = 0 // pad with zero
