@@ -28,6 +28,7 @@ type GoMLXModel struct {
 }
 
 func createGoMLXModelBackend(model *Model, options *options.Options) error {
+	fmt.Println("called createGoMLXModelBackend")
 	var insideError error
 	var recoverErr error
 
@@ -158,7 +159,7 @@ func createInputTensorsGoMLX(batch *PipelineBatch, inputsMeta []InputOutputInfo,
 					case "attention_mask":
 						backingSlice[counter] = int64(input.AttentionMask[k])
 					default:
-						return fmt.Errorf("input %s not recognized", inputMeta.Name)
+						return fmt.Errorf("input %s not recognized!!!!!!!!!! a", inputMeta.Name)
 					}
 				} else {
 					backingSlice[counter] = 0 // pad with zero

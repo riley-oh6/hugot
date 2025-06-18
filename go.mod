@@ -2,6 +2,8 @@ module github.com/knights-analytics/hugot
 
 go 1.24
 
+replace github.com/gomlx/onnx-gomlx => /home/rileyoh6/summer_2025/onnx-updates/onnx-gomlx
+
 require (
 	github.com/daulet/tokenizers v1.20.2
 	github.com/gomlx/exceptions v0.0.3
