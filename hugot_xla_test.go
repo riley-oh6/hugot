@@ -8,9 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gomlx/gomlx/types/shapes"
 	"github.com/gomlx/gomlx/types/tensors"
-	"github.com/gomlx/gopjrt/dtypes"
 	"github.com/knights-analytics/hugot/options"
 	"github.com/knights-analytics/hugot/pipelineBackends"
 )
@@ -246,29 +244,55 @@ type ModelConfig struct {
 	EosTokenID       []int `json:"eos_token_id"`
 }
 
-func CreateCache(batchSize, numLayers, numKeyValueHeads, seqLen, headDim int) map[string]*tensors.Tensor {
-	cache := make(map[string]*tensors.Tensor)
+func CreateCache(batchSize, numLayers, numKeyValueHeads, seqLen, headDim int) []*tensors.Tensor {
+	cache := make([]*tensors.Tensor, numLayers*2)
 
 	for layer := 0; layer < numLayers; layer++ {
-		// Create key tensor (even when seqLen == 0)
-		keyShape := shapes.Make(dtypes.Float32, batchSize, numKeyValueHeads, seqLen, headDim)
-		keyTensor := tensors.FromShape(keyShape)
-		keyName := fmt.Sprintf("past_key_values.%d.key", layer)
-		cache[keyName] = keyTensor
+		keyTensor := tensors.FromScalarAndDimensions(float32(0), batchSize, numKeyValueHeads, seqLen, headDim)
+		cache[layer*2] = keyTensor
 
-		// Create value tensor (same shape as key)
-		valueShape := shapes.Make(dtypes.Float32, batchSize, numKeyValueHeads, seqLen, headDim)
-		valueTensor := tensors.FromShape(valueShape)
-		valueName := fmt.Sprintf("past_key_values.%d.value", layer)
-		cache[valueName] = valueTensor
+		valueTensor := tensors.FromScalarAndDimensions(float32(0), batchSize, numKeyValueHeads, seqLen, headDim)
+		cache[layer*2+1] = valueTensor
 	}
 	return cache
 }
 
-func TestGemmaInferenceXLA(t *testing.T) {
-	// load model
-	path := "/home/rpinosio/repositories/knights/gemma"
-	onnxFilename := "model.onnx"
+func argmax(logits [][][]float32) [][]int32 {
+	batchSize := len(logits)
+	if batchSize == 0 {
+		return nil
+	}
+
+	output := make([][]int32, batchSize)
+	for i := range output {
+		output[i] = make([]int32, 1)
+
+		if len(logits[i]) == 0 {
+			output[i][0] = 0
+			continue
+		}
+
+		lastTokenLogits := logits[i][len(logits[i])-1]
+
+		maxIdx := 0
+		maxVal := lastTokenLogits[0]
+		for j, val := range lastTokenLogits[1:] {
+			if val > maxVal {
+				maxVal = val
+				maxIdx = j + 1
+			}
+		}
+
+		output[i][0] = int32(maxIdx)
+	}
+
+	return output
+}
+
+func TestGemmaInference(t *testing.T) {
+	path := "/home/testuser/repositories/onnx_models"
+
+	onnxFilename := "gemma_model.onnx"
 
 	options := &options.Options{
 		Backend: "XLA",
@@ -279,7 +303,7 @@ func TestGemmaInferenceXLA(t *testing.T) {
 
 	model, err := pipelineBackends.LoadModel(path, onnxFilename, options)
 	if err != nil {
-		t.Fatal(err)
+		panic(err)
 	}
 
 	// read config
@@ -300,79 +324,93 @@ func TestGemmaInferenceXLA(t *testing.T) {
 	var batch pipelineBackends.PipelineBatch
 	input := []string{"what is the capital of the Netherlands?"}
 	pipelineBackends.TokenizeInputs(&batch, model.Tokenizer, input)
-	err = pipelineBackends.CreateInputTensors(&batch, model.InputsMeta, "XLA")
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	pipelineBackends.CreateInputTensors(&batch, model.InputsMeta, "XLA")
+	// batch.Input[0].TokenIDs = []uint32{2, 105, 2364, 107, 14070, 563, 506, 5279,
+	// 	529, 506, 23933, 236881, 106, 107} //hard coded python tokens
 	batchSize := len(batch.Input)
-	inputs := batch.InputValues.([]*tensors.Tensor)
-	fmt.Println("Inputs:", inputs)
-
-	positionIDs := make([]uint32, batchSize*batch.MaxSequenceLength)
-	for i := 0; i < batchSize; i++ {
-		row := make([]uint32, batch.MaxSequenceLength)
-		for j := 0; j < batch.MaxSequenceLength; j++ {
-			row[j] = uint32(j + 1)
-		}
-		positionIDs = append(positionIDs, row...)
+	maxSeqLength := 0
+	for _, i := range batch.Input {
+		maxSeqLength = max(maxSeqLength, len(i.TokenIDs))
 	}
 
-	// positionIDsTensor := tensors.FromFlatDataAndDimensions(positionIDs, batchSize, batch.MaxSequenceLength)
+	positionIDs := make([][]int64, batchSize)
 
-	// batch.InputValues
+	for i := range positionIDs {
+		positionIDs[i] = make([]int64, maxSeqLength)
+		for j := range positionIDs[i] {
+			positionIDs[i][j] = int64(j + 1)
+		}
+	}
 
-	// inputs = append(inputs, batch.InputTensors...)
+	inputIDs := make([][]int64, len(batch.Input))
 
-	// model.GoMLXModel.Exec.Call(inputs...)
+	for i := range inputIDs {
+		for _, tokenID := range batch.Input[i].TokenIDs {
+			inputIDs[i] = append(inputIDs[i], int64(tokenID))
+		}
+	}
 
-	// use 1 because gomlx tensor creation fails with 0
-	// cache := CreateCache(batchSize, config.NumHiddenLayers, config.NumKeyValueHeads, 1, config.HeadDim)
+	inputIDsTensor := tensors.FromAnyValue(inputIDs)
+	positionIDsTensor := tensors.FromAnyValue(positionIDs)
 
-	// // Add all KV cache entries
-	// for layer := 0; layer < config.NumHiddenLayers; layer++ {
-	// 	key := fmt.Sprintf("past_key_values.%d.key", layer)
-	// 	value := fmt.Sprintf("past_key_values.%d.value", layer)
+	var modelInputs []*tensors.Tensor
+	modelInputs = append(modelInputs, inputIDsTensor)
+	modelInputs = append(modelInputs, positionIDsTensor)
 
-	// 	// Create a map for this layer's key-value pair
-	// 	kMap := map[string]*tensors.Tensor{
-	// 		key: cache[key],
-	// 	}
-	// 	inputs = append(inputs, kMap)
+	cache := CreateCache(batchSize, config.NumHiddenLayers, config.NumKeyValueHeads, 0, config.HeadDim)
 
-	// 	vMap := map[string]*tensors.Tensor{
-	// 		value: cache[value],
-	// 	}
-	// 	inputs = append(inputs, vMap)
-	// }
-	// type KeyValueTensor struct {
-	//     Key   string
-	//     Value *tensors.Tensor
-	// }
+	modelInputs = append(modelInputs, cache...)
 
-	// for layer := 0; layer < config.NumHiddenLayers; layer++ {
-	//     key := fmt.Sprintf("past_key_values.%d.key", layer)
-	//     value := fmt.Sprintf("past_key_values.%d.value", layer)
+	// text generation loop
+	maxNewTokens := 1024
+	generatedTokens := make([][]uint32, batchSize)
+	for i := range generatedTokens {
+		generatedTokens[i] = make([]uint32, 0)
+	}
+	for step := 0; step < maxNewTokens; step++ {
+		output := model.GoMLXModel.Exec.Call(modelInputs)
+		logits := output[0]
+		presentKeyValues := output[1:]
 
-	//     // Using struct instead of map
-	//     kStruct := KeyValueTensor{
-	//         Key:   key,
-	//         Value: cache[key],
-	//     }
-	//     inputs = append(inputs, kStruct)
+		logitsData := logits.Value().([][][]float32)
 
-	//     vStruct := KeyValueTensor{
-	//         Key:   value,
-	//         Value: cache[value],
-	//     }
-	//     inputs = append(inputs, vStruct)
-	// }
+		nextTokenIDs := argmax(logitsData)
 
-	// fmt.Println(model.GoMLXModel.OnnxModel.InputsNames)
-	// fmt.Println(model.GoMLXModel.OnnxModel.InputsShapes)
-	// fmt.Println("")
-	// // fmt.Println(inputs)
+		terminate := true
+		for i := 0; i < batchSize; i++ {
+			tokenID := int64(nextTokenIDs[i][0])
+			generatedTokens[i] = append(generatedTokens[i], uint32(tokenID))
 
-	// fmt.Println(inputs...)
+			if tokenID != int64(config.EosTokenID[1]) {
+				terminate = false
+			}
+		}
+
+		if terminate {
+			break
+		}
+
+		newInputIDs := make([][]int64, batchSize)
+		for i := 0; i < batchSize; i++ {
+			newInputIDs[i] = []int64{int64(nextTokenIDs[i][0])}
+		}
+		inputIDsTensor = tensors.FromAnyValue(newInputIDs)
+
+		currentPositions := positionIDsTensor.Value().([][]int64)
+		newPositionIDs := make([][]int64, batchSize)
+		for i := 0; i < batchSize; i++ {
+			lastPos := currentPositions[i][len(currentPositions[i])-1]
+			newPositionIDs[i] = []int64{lastPos + 1}
+		}
+		positionIDsTensor = tensors.FromAnyValue(newPositionIDs)
+
+		modelInputs = []*tensors.Tensor{inputIDsTensor, positionIDsTensor}
+		modelInputs = append(modelInputs, presentKeyValues...)
+
+	}
+
+	// Decode
+	fmt.Println("Generated tokens for each sequence:")
+	fmt.Println(pipelineBackends.Decode(generatedTokens[0], model.Tokenizer, false))
 
 }
