@@ -7,7 +7,7 @@ services:
       dockerfile: ./Dockerfile
       target: hugot-runtime
     volumes:
-      - $src_dir:/home/testuser/repositories/hugot
+      - /home/azureuser/summer_2025:/home/testuser/repositories
     entrypoint: ["tail", "-f", "/dev/null"]
 #    deploy:
 #      resources:

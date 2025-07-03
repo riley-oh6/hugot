@@ -17,6 +17,8 @@ type BasePipeline struct {
 	Runtime         string
 	Model           *Model
 	PipelineTimings *timings
+	IsGenerative    bool
+	MaxTokens       int
 }
 
 type InputOutputInfo struct {
@@ -105,9 +107,11 @@ type PipelineBatch struct {
 	PaddingMask       [][]bool
 	DestroyInputs     func() error
 	OutputValues      []OutputArray
+	MaxNewTokens      int
 }
 
 type OutputArray struct {
+	Result4D [][][][]float32
 	Result2D [][]float32
 	Result3D [][][]float32
 }

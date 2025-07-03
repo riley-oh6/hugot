@@ -361,56 +361,88 @@ func TestGemmaInference(t *testing.T) {
 
 	modelInputs = append(modelInputs, cache...)
 
-	// text generation loop
-	maxNewTokens := 1024
-	generatedTokens := make([][]uint32, batchSize)
-	for i := range generatedTokens {
-		generatedTokens[i] = make([]uint32, 0)
-	}
-	for step := 0; step < maxNewTokens; step++ {
-		output := model.GoMLXModel.Exec.Call(modelInputs)
-		logits := output[0]
-		presentKeyValues := output[1:]
+	// // text generation loop
+	// maxNewTokens := 1024
+	// generatedTokens := make([][]uint32, batchSize)
+	// for i := range generatedTokens {
+	// 	generatedTokens[i] = make([]uint32, 0)
+	// }
+	// for step := 0; step < maxNewTokens; step++ {
+	// 	output := model.GoMLXModel.Exec.Call(modelInputs)
+	// 	logits := output[0]
+	// 	presentKeyValues := output[1:]
+	// 	fmt.Println(presentKeyValues[0].Value())
+	// 	logitsData := logits.Value().([][][]float32)
 
-		logitsData := logits.Value().([][][]float32)
+	// 	nextTokenIDs := argmax(logitsData)
 
-		nextTokenIDs := argmax(logitsData)
+	// 	terminate := true
+	// 	for i := 0; i < batchSize; i++ {
+	// 		tokenID := int64(nextTokenIDs[i][0])
+	// 		generatedTokens[i] = append(generatedTokens[i], uint32(tokenID))
 
-		terminate := true
-		for i := 0; i < batchSize; i++ {
-			tokenID := int64(nextTokenIDs[i][0])
-			generatedTokens[i] = append(generatedTokens[i], uint32(tokenID))
+	// 		if tokenID != int64(config.EosTokenID[1]) {
+	// 			terminate = false
+	// 		}
+	// 	}
 
-			if tokenID != int64(config.EosTokenID[1]) {
-				terminate = false
-			}
-		}
+	// 	if terminate {
+	// 		break
+	// 	}
 
-		if terminate {
-			break
-		}
+	// 	newInputIDs := make([][]int64, batchSize)
+	// 	for i := 0; i < batchSize; i++ {
+	// 		newInputIDs[i] = []int64{int64(nextTokenIDs[i][0])}
+	// 	}
+	// 	inputIDsTensor = tensors.FromAnyValue(newInputIDs)
 
-		newInputIDs := make([][]int64, batchSize)
-		for i := 0; i < batchSize; i++ {
-			newInputIDs[i] = []int64{int64(nextTokenIDs[i][0])}
-		}
-		inputIDsTensor = tensors.FromAnyValue(newInputIDs)
+	// 	currentPositions := positionIDsTensor.Value().([][]int64)
+	// 	newPositionIDs := make([][]int64, batchSize)
+	// 	for i := 0; i < batchSize; i++ {
+	// 		lastPos := currentPositions[i][len(currentPositions[i])-1]
+	// 		newPositionIDs[i] = []int64{lastPos + 1}
+	// 	}
+	// 	positionIDsTensor = tensors.FromAnyValue(newPositionIDs)
 
-		currentPositions := positionIDsTensor.Value().([][]int64)
-		newPositionIDs := make([][]int64, batchSize)
-		for i := 0; i < batchSize; i++ {
-			lastPos := currentPositions[i][len(currentPositions[i])-1]
-			newPositionIDs[i] = []int64{lastPos + 1}
-		}
-		positionIDsTensor = tensors.FromAnyValue(newPositionIDs)
+	// 	modelInputs = []*tensors.Tensor{inputIDsTensor, positionIDsTensor}
+	// 	modelInputs = append(modelInputs, presentKeyValues...)
 
-		modelInputs = []*tensors.Tensor{inputIDsTensor, positionIDsTensor}
-		modelInputs = append(modelInputs, presentKeyValues...)
-
-	}
+	// }
 
 	// Decode
 	fmt.Println("Generated tokens for each sequence:")
-	fmt.Println(pipelineBackends.Decode(generatedTokens[0], model.Tokenizer, false))
+	fmt.Println(pipelineBackends.Decode([]uint32{236881, 108, 818, 5279, 529, 506, 23933, 563, 28007, 236761, 108, 106}, model.Tokenizer, false))
 
+}
+func check(err error) {
+	if err != nil {
+		panic(err.Error())
+	}
+}
+
+func TestHugoPipeline(t *testing.T) {
+	session, err := NewXLASession()
+	check(err)
+
+	defer func(session *Session) {
+		err := session.Destroy()
+		check(err)
+	}(session)
+
+	config := TextGenerationConfig{
+		ModelPath:    "/home/testuser/repositories/onnx_models",
+		Name:         "test pipeline",
+		OnnxFilename: "gemma_model.onnx",
+	}
+
+	gemmaPipeline, err := NewPipeline(session, config)
+	gemmaPipeline.MaxNewTokens = 15
+
+	check(err)
+
+	batch := []string{"what is the capital of the Netherlands"}
+	batchResult, err := gemmaPipeline.Run(batch)
+	check(err)
+
+	fmt.Println(batchResult.GetOutput())
 }

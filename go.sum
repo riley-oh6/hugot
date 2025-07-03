@@ -31,12 +31,8 @@ github.com/gomlx/exceptions v0.0.3 h1:HKnTgEjj4jlmhr8zVFkTP9qmV1ey7ypYYosQ8GzXWu
 github.com/gomlx/exceptions v0.0.3/go.mod h1:uHL0TQwJ0xaV2/snJOJV6hSE4yRmhhfymuYgNredGxU=
 github.com/gomlx/go-huggingface v0.2.1 h1:z2PC6ftv5hfO6jqWSpnUmxSzarcTbj4TU/dlzOwqBdk=
 github.com/gomlx/go-huggingface v0.2.1/go.mod h1:pSI9KFkGVksYYnNNO5lqLPBR0hzboFQb2FGrpGjseIY=
-github.com/gomlx/gomlx v0.20.1 h1:+q0sUKpP3PiQ8h1imUJ9RERiVTI/97AQn5wFMSR+NB4=
-github.com/gomlx/gomlx v0.20.1/go.mod h1:oMZHQooIZDlLtIHDzDwNFg9AKcqUYCuZMNzHQAyaycw=
 github.com/gomlx/gopjrt v0.7.3 h1:3a5eA69adMrBzBOfkscP/g+g3qOO/5Pv4s8iK205DTI=
 github.com/gomlx/gopjrt v0.7.3/go.mod h1:VswjttDY1uSllQ+Vs69P4kgsH3EkFEHADUCdDbfgh0Y=
-github.com/gomlx/onnx-gomlx v0.2.4 h1:vZXXeUBq6XjPemZ16iwjNaJs/qMDMMQ+nb6wALQeCGc=
-github.com/gomlx/onnx-gomlx v0.2.4/go.mod h1:mBFZF1OT5hW/jsc0ae58VKoB9BaGYpEaZ36xakWxEds=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
 github.com/google/gofuzz v1.0.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=

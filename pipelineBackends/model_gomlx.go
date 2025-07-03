@@ -73,10 +73,14 @@ func createGoMLXModelBackend(model *Model, options *options.Options) error {
 		// Create model executor.
 		callFunc := func(ctx *context.Context, inputs []*graph.Node) []*graph.Node {
 			inputsMap := map[string]*graph.Node{
-				"input_ids":      inputs[0],
-				"attention_mask": inputs[1]}
-			if modelParsed.NumInputs() == 3 {
-				inputsMap["token_type_ids"] = inputs[2]
+				"input_ids":    inputs[0],
+				"position_ids": inputs[1]}
+			for i := 0; i < 26; i++ {
+				key := fmt.Sprintf("past_key_values.%d.key", i)
+				value := fmt.Sprintf("past_key_values.%d.value", i)
+
+				inputsMap[key] = inputs[2*i+2]
+				inputsMap[value] = inputs[2*i+3]
 			}
 			return modelParsed.CallGraph(ctx, inputs[0].Graph(), inputsMap, outputNames...)
 		}
@@ -159,13 +163,9 @@ func createInputTensorsGoMLX(batch *PipelineBatch, inputsMeta []InputOutputInfo,
 					case "attention_mask":
 						backingSlice[counter] = int64(input.AttentionMask[k])
 					default:
-<<<<<<< Updated upstream
-						return fmt.Errorf("input %s not recognized!!!!!!!!!! a", inputMeta.Name)
-=======
 						// TODO skip this temp
 						continue
-						return fmt.Errorf("input %s not recognized", inputMeta.Name)
->>>>>>> Stashed changes
+						// return fmt.Errorf("input %s not recognized", inputMeta.Name)
 					}
 				} else {
 					backingSlice[counter] = 0 // pad with zero
@@ -190,6 +190,49 @@ func createInputTensorsGoMLX(batch *PipelineBatch, inputsMeta []InputOutputInfo,
 	return nil
 }
 
+func argmax(logits [][][]float32) [][]int32 {
+	batchSize := len(logits)
+	if batchSize == 0 {
+		return nil
+	}
+
+	output := make([][]int32, batchSize)
+	for i := range output {
+		output[i] = make([]int32, 1)
+
+		if len(logits[i]) == 0 {
+			output[i][0] = 0
+			continue
+		}
+
+		lastTokenLogits := logits[i][len(logits[i])-1]
+
+		maxIdx := 0
+		maxVal := lastTokenLogits[0]
+		for j, val := range lastTokenLogits[1:] {
+			if val > maxVal {
+				maxVal = val
+				maxIdx = j + 1
+			}
+		}
+
+		output[i][0] = int32(maxIdx)
+	}
+
+	return output
+}
+
+func Uint32ToFloat32(input [][]uint32) [][]float32 {
+	output := make([][]float32, len(input))
+	for i, row := range input {
+		output[i] = make([]float32, len(row))
+		for j, val := range row {
+			output[i][j] = float32(val)
+		}
+	}
+	return output
+}
+
 func runGoMLXSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 
 	var outputs []*tensors.Tensor
@@ -199,11 +242,57 @@ func runGoMLXSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 		}
 	}()
 
-	err := exceptions.TryCatch[error](func() {
-		outputs = p.Model.GoMLXModel.Exec.Call(batch.InputValues.([]*tensors.Tensor))
-	})
-	if err != nil {
-		return err
+	// switch on p.isGenerative, if generative loop, and do notconvert tensors to go slices
+	if !p.IsGenerative {
+		err := exceptions.TryCatch[error](func() {
+			outputs = p.Model.GoMLXModel.Exec.Call(batch.InputValues.([]*tensors.Tensor))
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		modelInput := batch.InputValues.([]*tensors.Tensor)
+		var generatedTokens [][]uint32
+		batchSize := len(batch.Input)
+		generatedTokens = make([][]uint32, batchSize)
+
+		for step := 0; step < batch.MaxNewTokens; step++ {
+			outputs = p.Model.GoMLXModel.Exec.Call(modelInput)
+
+			logits := outputs[0].Value().([][][]float32)
+			presentKeyValues := outputs[1:]
+			nextTokenIDs := argmax(logits)
+
+			terminate := true
+			for i := range batchSize {
+				tokenID := int64(nextTokenIDs[i][0])
+				generatedTokens[i] = append(generatedTokens[i], uint32(tokenID))
+
+				if tokenID != int64(106) {
+					terminate = false
+				}
+			}
+
+			if terminate {
+				break
+			}
+
+			newInputIDs := make([][]int64, batchSize)
+			for i := range batchSize {
+				newInputIDs[i] = []int64{int64(nextTokenIDs[i][0])}
+			}
+
+			currentPositions := modelInput[1].Value().([][]int64)
+			newPositionIDs := make([][]int64, batchSize)
+			for i := range batchSize {
+				lastPos := currentPositions[i][len(currentPositions[i])-1]
+				newPositionIDs[i] = []int64{lastPos + 1}
+			}
+			modelInput = []*tensors.Tensor{tensors.FromAnyValue(newInputIDs), tensors.FromAnyValue(newPositionIDs)}
+			modelInput = append(modelInput, presentKeyValues...)
+		}
+		newTokens := Uint32ToFloat32(generatedTokens)
+		outputs = []*tensors.Tensor{tensors.FromAnyValue(newTokens)}
 	}
 
 	convertedOutput := make([]OutputArray, len(outputs))
@@ -218,7 +307,7 @@ func runGoMLXSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 
 	// store resulting tensors
 	batch.OutputValues = convertedOutput
-
+	fmt.Println(batch.OutputValues[0].Result2D)
 	return nil
 }
 

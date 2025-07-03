@@ -25,10 +25,13 @@ func ReshapeOutput(input *[]float32, meta InputOutputInfo, paddingMask [][]bool,
 	dimensions := meta.Dimensions.ValuesInt()
 	lenDimensions := len(dimensions)
 	switch lenDimensions {
+
 	case 2:
 		outArray.Result2D = flatDataTo2D(input, paddingMask, dimensions[lenDimensions-1])
 	case 3:
 		outArray.Result3D = flatDataTo3D(input, paddingMask, sequenceLength, dimensions[lenDimensions-1])
+	case 4:
+		outArray.Result4D = flatDataTo4D(input, paddingMask, sequenceLength, sequenceLength, dimensions[lenDimensions-1])
 	}
 	return outArray
 }
@@ -74,6 +77,39 @@ func flatDataTo3D(input *[]float32, paddingMask [][]bool, sequenceLength int, di
 			for i := 0; i < dimension; i++ {
 				embedding[i] = (*input)[counter]
 				counter++
+			}
+
+			tokenEmbeddings = append(tokenEmbeddings, embedding)
+		}
+
+		output[batchIndex] = tokenEmbeddings
+	}
+
+	return output
+}
+
+func flatDataTo4D(input *[]float32, paddingMask [][]bool, sequenceLength int, secondDim int, lastDim int) [][][][]float32 {
+	output := make([][][][]float32, len(paddingMask))
+
+	counter := 0
+
+	for batchIndex, mask := range paddingMask {
+		tokenEmbeddings := make([][][]float32, 0, sequenceLength)
+
+		for _, isValid := range mask {
+			if !isValid {
+				counter = counter + (secondDim * lastDim)
+				continue
+			}
+
+			embedding := make([][]float32, secondDim)
+
+			for i := 0; i < secondDim; i++ {
+				embedding[i] = make([]float32, lastDim)
+				for j := 0; j < lastDim; j++ {
+					embedding[i][j] = (*input)[counter]
+					counter++
+				}
 			}
 
 			tokenEmbeddings = append(tokenEmbeddings, embedding)
