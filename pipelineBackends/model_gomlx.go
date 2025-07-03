@@ -268,8 +268,10 @@ func runGoMLXSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 				tokenID := int64(nextTokenIDs[i][0])
 				generatedTokens[i] = append(generatedTokens[i], uint32(tokenID))
 
+				//TODO change this hardcode
 				if tokenID != int64(106) {
 					terminate = false
+					break
 				}
 			}
 
