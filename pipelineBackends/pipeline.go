@@ -233,6 +233,7 @@ func CreateModelBackend(model *Model, s *options.Options) error {
 	case "ORT":
 		err = createORTModelBackend(model, s)
 	case "GO", "XLA":
+		model.IsGenerative = true
 		err = createGoMLXModelBackend(model, s)
 	}
 	return err

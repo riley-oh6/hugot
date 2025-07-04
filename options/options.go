@@ -10,6 +10,7 @@ type Options struct {
 	GoMLXOptions   *GoMLXOptions
 	Destroy        func() error
 	BackendOptions any
+	IsGenerative   bool
 }
 
 func Defaults() *Options {

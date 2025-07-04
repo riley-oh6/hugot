@@ -7,8 +7,10 @@ import (
 
 	"github.com/gomlx/exceptions"
 	"github.com/gomlx/gomlx/backends"
-
 	"github.com/gomlx/gomlx/graph"
+	"github.com/gomlx/gopjrt/dtypes"
+
+	. "github.com/gomlx/gomlx/graph"
 	"github.com/gomlx/gomlx/ml/context"
 	"github.com/gomlx/gomlx/types/tensors"
 	"github.com/gomlx/onnx-gomlx/onnx"
@@ -75,6 +77,7 @@ func createGoMLXModelBackend(model *Model, options *options.Options) error {
 			inputsMap := map[string]*graph.Node{
 				"input_ids":    inputs[0],
 				"position_ids": inputs[1]}
+			// TODO
 			for i := 0; i < 26; i++ {
 				key := fmt.Sprintf("past_key_values.%d.key", i)
 				value := fmt.Sprintf("past_key_values.%d.value", i)
@@ -82,7 +85,48 @@ func createGoMLXModelBackend(model *Model, options *options.Options) error {
 				inputsMap[key] = inputs[2*i+2]
 				inputsMap[value] = inputs[2*i+3]
 			}
-			return modelParsed.CallGraph(ctx, inputs[0].Graph(), inputsMap, outputNames...)
+			// if not generative return this, if generative, append extra stuff to graph -- loop, argmaxes, etc look at Jan's samplestepgraphfn thing
+			if !model.IsGenerative {
+				return modelParsed.CallGraph(ctx, inputs[0].Graph(), inputsMap, outputNames...)
+			} else {
+				fmt.Println("DEFINITELY GOT INTO THE CORRECT CALL FUNCTION")
+				g := inputs[0].Graph()
+				inputIDs := inputs[0]
+				positionIDs := inputs[1]
+
+				modelOutputs := modelParsed.CallGraph(ctx, g, inputsMap, outputNames...)
+				logits := modelOutputs[0]
+				kvCache := modelOutputs[1:]
+
+				shape := logits.Shape().Dimensions
+				vocabSize := shape[2]
+				seqLen := shape[1]
+
+				lastIdx := graph.Scalar(g, dtypes.Int32, seqLen-1)
+
+				logitsLast := graph.DynamicSlice(
+					logits,
+					[]*Node{graph.ScalarZero(g, dtypes.Int32), lastIdx, graph.ScalarZero(g, dtypes.Int32)},
+					[]int{int(shape[0]), 1, int(vocabSize)},
+				)
+
+				logitsLast = graph.Reshape(logitsLast, 1, vocabSize)
+
+				nextPredictedToken := ArgMax(logitsLast, 1, dtypes.Int64)
+				nextPredictedToken = graph.Reshape(nextPredictedToken, 1, 1)
+				// inputIDs = graph.Concatenate([]*Node{inputIDs, nextPredictedToken}, 1)
+				inputIDs = nextPredictedToken
+
+				currentMaxPos := graph.Scalar(g, dtypes.Int64, seqLen)
+				newPositionID := graph.Reshape(currentMaxPos, 1, 1)
+				positionIDs = graph.Concatenate([]*Node{positionIDs, newPositionID}, 1)
+
+				outputs := []*Node{inputIDs, positionIDs}
+				outputs = append(outputs, kvCache...)
+
+				return outputs
+			}
+
 		}
 
 		exec := context.NewExec(backend, ctx, callFunc)
@@ -190,49 +234,6 @@ func createInputTensorsGoMLX(batch *PipelineBatch, inputsMeta []InputOutputInfo,
 	return nil
 }
 
-func argmax(logits [][][]float32) [][]int32 {
-	batchSize := len(logits)
-	if batchSize == 0 {
-		return nil
-	}
-
-	output := make([][]int32, batchSize)
-	for i := range output {
-		output[i] = make([]int32, 1)
-
-		if len(logits[i]) == 0 {
-			output[i][0] = 0
-			continue
-		}
-
-		lastTokenLogits := logits[i][len(logits[i])-1]
-
-		maxIdx := 0
-		maxVal := lastTokenLogits[0]
-		for j, val := range lastTokenLogits[1:] {
-			if val > maxVal {
-				maxVal = val
-				maxIdx = j + 1
-			}
-		}
-
-		output[i][0] = int32(maxIdx)
-	}
-
-	return output
-}
-
-func Uint32ToFloat32(input [][]uint32) [][]float32 {
-	output := make([][]float32, len(input))
-	for i, row := range input {
-		output[i] = make([]float32, len(row))
-		for j, val := range row {
-			output[i][j] = float32(val)
-		}
-	}
-	return output
-}
-
 func runGoMLXSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 
 	var outputs []*tensors.Tensor
@@ -251,54 +252,15 @@ func runGoMLXSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 			return err
 		}
 	} else {
-		modelInput := batch.InputValues.([]*tensors.Tensor)
-		var generatedTokens [][]uint32
-		batchSize := len(batch.Input)
-		generatedTokens = make([][]uint32, batchSize)
-
-		for step := 0; step < batch.MaxNewTokens; step++ {
-			outputs = p.Model.GoMLXModel.Exec.Call(modelInput)
-
-			logits := outputs[0].Value().([][][]float32)
-			presentKeyValues := outputs[1:]
-			nextTokenIDs := argmax(logits)
-
-			terminate := true
-			for i := range batchSize {
-				tokenID := int64(nextTokenIDs[i][0])
-				generatedTokens[i] = append(generatedTokens[i], uint32(tokenID))
-
-				//TODO change this hardcode
-				if tokenID != int64(106) {
-					terminate = false
-					break
-				}
-			}
-
-			if terminate {
-				break
-			}
-
-			newInputIDs := make([][]int64, batchSize)
-			for i := range batchSize {
-				newInputIDs[i] = []int64{int64(nextTokenIDs[i][0])}
-			}
-
-			currentPositions := modelInput[1].Value().([][]int64)
-			newPositionIDs := make([][]int64, batchSize)
-			for i := range batchSize {
-				lastPos := currentPositions[i][len(currentPositions[i])-1]
-				newPositionIDs[i] = []int64{lastPos + 1}
-			}
-			modelInput = []*tensors.Tensor{tensors.FromAnyValue(newInputIDs), tensors.FromAnyValue(newPositionIDs)}
-			modelInput = append(modelInput, presentKeyValues...)
-		}
-		newTokens := Uint32ToFloat32(generatedTokens)
-		outputs = []*tensors.Tensor{tensors.FromAnyValue(newTokens)}
+		fmt.Println("DEFINITELY GOT INTO THE GENERATIVE MODE")
+		outputs = p.Model.GoMLXModel.Exec.Call(batch.InputValues.([]*tensors.Tensor))
+		fmt.Println(batch.InputValues.([]*tensors.Tensor)[0].Value())
+		fmt.Println(batch.InputValues.([]*tensors.Tensor)[1].Value())
 	}
-
+	fmt.Println("generated token: ", outputs[0].Value())
 	convertedOutput := make([]OutputArray, len(outputs))
 
+	outputs[0].DType()
 	for i, t := range outputs {
 		var rawOutput []float32
 		tensors.ConstFlatData(t, func(flat []float32) {
@@ -309,7 +271,6 @@ func runGoMLXSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 
 	// store resulting tensors
 	batch.OutputValues = convertedOutput
-	fmt.Println(batch.OutputValues[0].Result2D)
 	return nil
 }
 
