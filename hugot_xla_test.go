@@ -3,13 +3,10 @@
 package hugot
 
 import (
-	"fmt"
 	"os"
 	"testing"
 
 	"github.com/knights-analytics/hugot/options"
-	"github.com/knights-analytics/hugot/pipelineBackends"
-	"github.com/knights-analytics/hugot/pipelines"
 )
 
 // FEATURE EXTRACTION
@@ -187,7 +184,7 @@ func TestZeroShotClassificationPipelineValidationXLA(t *testing.T) {
 
 // text generation
 func TestTextGenerationPipelineXLA(t *testing.T) {
-	session, err := NewGoSession()
+	session, err := NewXLASession()
 	checkT(t, err)
 	defer func(session *Session) {
 		destroyErr := session.Destroy()
@@ -197,7 +194,7 @@ func TestTextGenerationPipelineXLA(t *testing.T) {
 }
 
 func TestTextGenerationPipelineValidationXLA(t *testing.T) {
-	session, err := NewGoSession()
+	session, err := NewXLASession()
 	checkT(t, err)
 	defer func(session *Session) {
 		destroyErr := session.Destroy()
@@ -259,35 +256,4 @@ func check(err error) {
 	if err != nil {
 		panic(err.Error())
 	}
-}
-
-func TestHugotPipeline(t *testing.T) {
-	session, err := NewXLASession()
-	check(err)
-
-	defer func(session *Session) {
-		err := session.Destroy()
-		check(err)
-	}(session)
-
-	config := TextGenerationConfig{
-		ModelPath:    "/home/testuser/repositories/onnx_models",
-		Name:         "test pipeline",
-		OnnxFilename: "gemma_model.onnx",
-		Options: []pipelineBackends.PipelineOption[*pipelines.TextGenerationPipeline]{
-			pipelines.WithMaxTokens(15),
-		},
-	}
-
-	gemmaPipeline, err := NewPipeline(session, config)
-
-	check(err)
-
-	batch := []string{"what is the capital of the Netherlands?",
-		"who was the first president of the United States?"}
-
-	batchResult, err := gemmaPipeline.Run(batch)
-	check(err)
-
-	fmt.Println(batchResult.GetOutput())
 }

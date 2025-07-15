@@ -28,6 +28,8 @@ type Model struct {
 	MaxPositionEmbeddings int
 	NumHiddenLayers       int // Number of key value heads, used for text generation
 	EosTokenIDs           []int
+	NumKeyValueHeads      int
+	HeadDim               int
 }
 
 func LoadModel(path string, onnxFilename string, options *options.Options) (*Model, error) {
@@ -157,7 +159,7 @@ func loadModelConfig(model *Model) error {
 					}
 				}
 			} else {
-				return fmt.Errorf("eos_token_id is not an array")
+				return errors.New("eos_token_id is not an array")
 			}
 		}
 
@@ -165,9 +167,26 @@ func loadModelConfig(model *Model) error {
 			if numHiddenLayersFloat, ok := numHiddenLayersRaw.(float64); ok {
 				model.NumHiddenLayers = int(numHiddenLayersFloat)
 			} else {
-				return fmt.Errorf("num_hidden_layers is not a number")
+				return errors.New("num_hidden_layers is not a number")
 			}
 		}
+
+		if numKeyValueHeads, exists := configMap["num_key_value_heads"]; exists {
+			if numKeyValueHeadsValue, ok := numKeyValueHeads.(float64); ok {
+				model.NumKeyValueHeads = int(numKeyValueHeadsValue)
+			} else {
+				return errors.New("num_key_value_heads is not a number")
+			}
+		}
+
+		if headDim, exists := configMap["head_dim"]; exists {
+			if headDimValue, ok := headDim.(float64); ok {
+				model.HeadDim = int(headDimValue)
+			} else {
+				return errors.New("num_key_value_heads is not a number")
+			}
+		}
+
 	}
 	return nil
 }

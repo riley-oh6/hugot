@@ -8,10 +8,8 @@ import (
 	"time"
 
 	"github.com/gomlx/gomlx/types/tensors"
-	jsoniter "github.com/json-iterator/go"
 	"github.com/knights-analytics/hugot/options"
 	"github.com/knights-analytics/hugot/pipelineBackends"
-	"github.com/knights-analytics/hugot/util"
 )
 
 type TextGenerationPipeline struct {
@@ -20,7 +18,7 @@ type TextGenerationPipeline struct {
 	NumKeyValueHeads int
 	HeadDim          int
 	NumHiddenLayers  int
-	EosTokenID       []int
+	EosTokenIDs      []int
 	OutputName       string
 	Output           pipelineBackends.InputOutputInfo
 }
@@ -29,12 +27,12 @@ type TextGenerationOutput struct {
 	TextGenerationOutputs []string
 }
 
-type configInput struct {
-	NumKeyValueHeads int   `json:"num_key_value_heads"`
-	HeadDim          int   `json:"head_dim"`
-	NumHiddenLayers  int   `json:"num_hidden_layers"`
-	EosTokenID       []int `json:"eos_token_id"`
-}
+// type configInput struct {
+// 	NumKeyValueHeads int   `json:"num_key_value_heads"`
+// 	HeadDim          int   `json:"head_dim"`
+// 	NumHiddenLayers  int   `json:"num_hidden_layers"`
+// 	EosTokenID       []int `json:"eos_token_id"`
+// }
 
 func (t *TextGenerationOutput) GetOutput() []any {
 	out := make([]any, len(t.TextGenerationOutputs))
@@ -64,24 +62,13 @@ func NewTextGenerationPipeline(config pipelineBackends.PipelineConfig[*TextGener
 	}
 
 	if pipeline.MaxNewTokens <= 0 {
-		pipeline.MaxNewTokens = 524 // Default value if not set
+		pipeline.MaxNewTokens = 1028 // Default value if not set as per Python
 	}
 
-	configPath := util.PathJoinSafe(model.Path, "config.json")
-	pipelineInputConfig := configInput{}
-	mapBytes, err := util.ReadFileBytes(configPath)
-	if err != nil {
-		return nil, err
-	}
-	err = jsoniter.Unmarshal(mapBytes, &pipelineInputConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	pipeline.NumKeyValueHeads = pipelineInputConfig.NumKeyValueHeads
-	pipeline.HeadDim = pipelineInputConfig.HeadDim
-	pipeline.NumHiddenLayers = pipelineInputConfig.NumHiddenLayers
-	pipeline.EosTokenID = pipelineInputConfig.EosTokenID
+	pipeline.NumKeyValueHeads = model.NumKeyValueHeads
+	pipeline.HeadDim = model.HeadDim
+	pipeline.NumHiddenLayers = model.NumHiddenLayers
+	pipeline.EosTokenIDs = model.EosTokenIDs
 
 	err = pipeline.Validate()
 	if err != nil {
@@ -116,17 +103,17 @@ func (p *TextGenerationPipeline) GetStats() []string {
 
 func (p *TextGenerationPipeline) Validate() error {
 	var validationErrors []error
-	if len(p.EosTokenID) == 0 {
-		validationErrors = append(validationErrors, fmt.Errorf("no EOS Token IDs found"))
+	if len(p.EosTokenIDs) == 0 {
+		validationErrors = append(validationErrors, errors.New("no EOS Token IDs found"))
 	}
 	if p.NumHiddenLayers == 0 {
-		validationErrors = append(validationErrors, fmt.Errorf("num hidden layers cannot be 0"))
+		validationErrors = append(validationErrors, errors.New("num hidden layers cannot be 0"))
 	}
 	if p.NumKeyValueHeads == 0 {
-		validationErrors = append(validationErrors, fmt.Errorf("num key value heads cannot be 0"))
+		validationErrors = append(validationErrors, errors.New("num key value heads cannot be 0"))
 	}
 	if p.HeadDim == 0 {
-		validationErrors = append(validationErrors, fmt.Errorf("head dim cannot be 0"))
+		validationErrors = append(validationErrors, errors.New("head dim cannot be 0"))
 	}
 	return errors.Join(validationErrors...)
 }
@@ -160,7 +147,7 @@ func (p *TextGenerationPipeline) Preprocess(batch *pipelineBackends.PipelineBatc
 func (p *TextGenerationPipeline) Forward(batch *pipelineBackends.PipelineBatch) error {
 	start := time.Now()
 
-	// ++++++++++++++++++++++++++++++++ GENERATION LOOP ++++++++++++++++++++++++++++++++
+	// generation loop
 	err := pipelineBackends.RunGenerativeGoMLXSessionOnBatch(batch, p.BasePipeline)
 	if err != nil {
 		return err
@@ -176,7 +163,6 @@ func (p *TextGenerationPipeline) Postprocess(batch *pipelineBackends.PipelineBat
 		TextGenerationOutputs: make([]string, len(batch.Input)),
 	}
 
-	fmt.Println(outputValues...)
 	for i, val := range outputValues {
 		tokenIDs := val.([]int64)
 		convertedTokens := make([]uint32, len(tokenIDs))
@@ -187,7 +173,7 @@ func (p *TextGenerationPipeline) Postprocess(batch *pipelineBackends.PipelineBat
 		decodedString, err := pipelineBackends.Decode(convertedTokens, p.Model.Tokenizer, true)
 
 		if err != nil {
-			return nil, fmt.Errorf("error in decoding generated tokens")
+			return nil, errors.New("error in decoding generated tokens")
 		}
 		output.TextGenerationOutputs[i] = decodedString
 	}

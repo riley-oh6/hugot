@@ -35,6 +35,7 @@ func loadExternalData(baseDirectory string, model *onnx.Model) error {
 	externalMap := map[string][]byte{}
 
 	for _, proto := range model.Proto.Graph.Initializer {
+		// proto.Datalocation is 1 if data is external, 0 otherwise
 		if proto.DataLocation == 1 {
 			externalPath := ""
 			offset := int64(0)
@@ -46,14 +47,16 @@ func loadExternalData(baseDirectory string, model *onnx.Model) error {
 					externalPath = entry.Value
 				case "offset":
 					parsedOffset, err := strconv.ParseInt(entry.Value, 10, 64)
-					if err == nil {
-						offset = parsedOffset
+					if err != nil {
+						return fmt.Errorf("parsing offset failed with err %w", err)
 					}
+					offset = parsedOffset
 				case "length":
 					parsedLength, err := strconv.ParseInt(entry.Value, 10, 64)
-					if err == nil {
-						length = parsedLength
+					if err != nil {
+						return fmt.Errorf("parsing length failed with err %w", err)
 					}
+					length = parsedLength
 				}
 			}
 
