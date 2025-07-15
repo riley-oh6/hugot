@@ -36,9 +36,9 @@ func loadExternalData(baseDirectory string, model *onnx.Model) error {
 
 	for _, proto := range model.Proto.Graph.Initializer {
 		if proto.DataLocation == 1 {
-			var externalPath string
-			var offset int64 = 0
-			var length int64 = -1
+			externalPath := ""
+			offset := int64(0)
+			length := int64(-1)
 
 			for _, entry := range proto.ExternalData {
 				switch entry.Key {
@@ -104,7 +104,7 @@ func createGenerativeCallFunc(model *Model, modelParsed *onnx.Model, outputNames
 		logitsLast := DynamicSlice(
 			logits,
 			[]*Node{ScalarZero(g, dtypes.Int32), lastIdx, ScalarZero(g, dtypes.Int32)},
-			[]int{int(shape[0]), 1, int(vocabSize)},
+			[]int{shape[0], 1, vocabSize},
 		)
 
 		batchSize := shape[0]
@@ -113,7 +113,7 @@ func createGenerativeCallFunc(model *Model, modelParsed *onnx.Model, outputNames
 		nextPredictedToken = Reshape(nextPredictedToken, batchSize, 1)
 
 		var terminate *graph.Node
-		for i, eosID := range model.EosTokenID {
+		for i, eosID := range model.EosTokenIDs {
 			eosNode := Squeeze(Equal(nextPredictedToken, Scalar(g, dtypes.Int64, eosID)))
 			if i == 0 {
 				terminate = eosNode
@@ -123,7 +123,7 @@ func createGenerativeCallFunc(model *Model, modelParsed *onnx.Model, outputNames
 		}
 		inputIDs := nextPredictedToken
 		posShape := inputs[1].Shape().Dimensions
-		posLen := int(posShape[1])
+		posLen := posShape[1]
 		lastIdxNode := Scalar(g, dtypes.Int32, posLen-1)
 		prevPosLast := DynamicSlice(
 			inputs[1],
@@ -131,16 +131,13 @@ func createGenerativeCallFunc(model *Model, modelParsed *onnx.Model, outputNames
 			[]int{batchSize, 1},
 		)
 		positionIDs := OnePlus(prevPosLast)
-		outputs := []*Node{inputIDs, positionIDs}
-		outputs = append(outputs, kvCache...)
-		outputs = append(outputs, terminate)
+		outputs := append(append([]*Node{inputIDs, positionIDs}, kvCache...), terminate)
 		return outputs
 	}
 }
 
 func createGoMLXModelBackend(model *Model, options *options.Options) error {
-	var insideError error
-	var recoverErr error
+	var insideError, recoverErr error
 
 	// we never want to panic so the calling program has a chance to shut down gracefully on error.
 	// we therefore catch all panics from goMLX as errors.
@@ -195,7 +192,7 @@ func createGoMLXModelBackend(model *Model, options *options.Options) error {
 			return modelParsed.CallGraph(ctx, inputs[0].Graph(), inputsMap, outputNames...)
 		}
 
-		if len(model.EosTokenID) > 0 {
+		if len(model.EosTokenIDs) > 0 {
 			callFunc = createGenerativeCallFunc(model, modelParsed, outputNames)
 		}
 
@@ -370,9 +367,9 @@ func RunGenerativeGoMLXSessionOnBatch(batch *PipelineBatch, p *BasePipeline) err
 			}
 		}
 
-		termTensor := outputTensors[len(outputTensors)-1]
+		eosMatchTensor := outputTensors[len(outputTensors)-1]
 		var doneFlags []bool
-		tensors.ConstFlatData(termTensor, func(flat []bool) {
+		tensors.ConstFlatData(eosMatchTensor, func(flat []bool) {
 			doneFlags = flat
 		})
 		for i, flag := range doneFlags {

@@ -27,7 +27,7 @@ type Model struct {
 	Pipelines             map[string]Pipeline
 	MaxPositionEmbeddings int
 	NumHiddenLayers       int // Number of key value heads, used for text generation
-	EosTokenID            []int
+	EosTokenIDs           []int
 }
 
 func LoadModel(path string, onnxFilename string, options *options.Options) (*Model, error) {
@@ -147,12 +147,11 @@ func loadModelConfig(model *Model) error {
 		}
 
 		if eosRaw, exists := configMap["eos_token_id"]; exists {
-			// was just thinking, what if eos token isn't an array, might need to change in the future
 			if eosList, ok := eosRaw.([]any); ok {
-				model.EosTokenID = make([]int, len(eosList))
+				model.EosTokenIDs = make([]int, len(eosList))
 				for i, v := range eosList {
 					if num, ok := v.(float64); ok {
-						model.EosTokenID[i] = int(num)
+						model.EosTokenIDs[i] = int(num)
 					} else {
 						return fmt.Errorf("eos_token_id contains non-numeric value at index %d", i)
 					}
@@ -166,7 +165,7 @@ func loadModelConfig(model *Model) error {
 			if numHiddenLayersFloat, ok := numHiddenLayersRaw.(float64); ok {
 				model.NumHiddenLayers = int(numHiddenLayersFloat)
 			} else {
-				fmt.Println("num_hidden_layers is not a number")
+				return fmt.Errorf("num_hidden_layers is not a number")
 			}
 		}
 	}

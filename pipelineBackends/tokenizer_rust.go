@@ -31,23 +31,6 @@ func loadRustTokenizer(tokenizerBytes []byte, model *Model) error {
 	return nil
 }
 
-//	func getRustTokenizerOptions(inputs []InputOutputInfo) ([]tokenizers.EncodeOption, error) {
-//		var encodeOptions []tokenizers.EncodeOption
-//		fmt.Println("inputs: ", inputs)
-//		for _, input := range inputs {
-//			switch input.Name {
-//			case "input_ids":
-//				encodeOptions = append(encodeOptions, tokenizers.WithReturnTokens())
-//			case "token_type_ids":
-//				encodeOptions = append(encodeOptions, tokenizers.WithReturnTypeIDs())
-//			case "attention_mask":
-//				encodeOptions = append(encodeOptions, tokenizers.WithReturnAttentionMask())
-//			default:
-//				return nil, fmt.Errorf("input %s not recognized", input.Name)
-//			}
-//		}
-//		return encodeOptions, nil
-//	}
 func getRustTokenizerOptions(inputs []InputOutputInfo) ([]tokenizers.EncodeOption, error) {
 	var encodeOptions []tokenizers.EncodeOption
 	for _, input := range inputs {
@@ -59,13 +42,10 @@ func getRustTokenizerOptions(inputs []InputOutputInfo) ([]tokenizers.EncodeOptio
 		case "attention_mask":
 			encodeOptions = append(encodeOptions, tokenizers.WithReturnAttentionMask())
 		case "position_ids":
-			// handle manually later
-			// fmt.Println("contains positional ids")
 			continue
 		default:
 			if strings.HasPrefix(input.Name, "past_key_values") {
 				// handled at model level
-				// fmt.Println("expects cached attention mechanism")
 				continue
 			}
 			return nil, fmt.Errorf("input %s not recognized", input.Name)

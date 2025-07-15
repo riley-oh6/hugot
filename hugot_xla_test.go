@@ -7,7 +7,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gomlx/gomlx/types/tensors"
 	"github.com/knights-analytics/hugot/options"
 	"github.com/knights-analytics/hugot/pipelineBackends"
 	"github.com/knights-analytics/hugot/pipelines"
@@ -186,6 +185,27 @@ func TestZeroShotClassificationPipelineValidationXLA(t *testing.T) {
 	zeroShotClassificationPipelineValidation(t, session)
 }
 
+// text generation
+func TestTextGenerationPipelineXLA(t *testing.T) {
+	session, err := NewGoSession()
+	checkT(t, err)
+	defer func(session *Session) {
+		destroyErr := session.Destroy()
+		checkT(t, destroyErr)
+	}(session)
+	textGenerationPipeline(t, session)
+}
+
+func TestTextGenerationPipelineValidationXLA(t *testing.T) {
+	session, err := NewGoSession()
+	checkT(t, err)
+	defer func(session *Session) {
+		destroyErr := session.Destroy()
+		checkT(t, destroyErr)
+	}(session)
+	textGenPipelineValidation(t, session)
+}
+
 // No same name
 
 func TestNoSameNamePipelineXLA(t *testing.T) {
@@ -235,35 +255,13 @@ func TestThreadSafetyXLACuda(t *testing.T) {
 	threadSafety(t, session, 1000)
 }
 
-// TEMP: testing how we can do inference with XLA and gemma
-
-type ModelConfig struct {
-	NumKeyValueHeads int   `json:"num_key_value_heads"`
-	HeadDim          int   `json:"head_dim"`
-	NumHiddenLayers  int   `json:"num_hidden_layers"`
-	EosTokenID       []int `json:"eos_token_id"`
-}
-
-func CreateCache(batchSize, numLayers, numKeyValueHeads, seqLen, headDim int) []*tensors.Tensor {
-	cache := make([]*tensors.Tensor, numLayers*2)
-
-	for layer := 0; layer < numLayers; layer++ {
-		keyTensor := tensors.FromScalarAndDimensions(float32(0), batchSize, numKeyValueHeads, seqLen, headDim)
-		cache[layer*2] = keyTensor
-
-		valueTensor := tensors.FromScalarAndDimensions(float32(0), batchSize, numKeyValueHeads, seqLen, headDim)
-		cache[layer*2+1] = valueTensor
-	}
-	return cache
-}
-
 func check(err error) {
 	if err != nil {
 		panic(err.Error())
 	}
 }
 
-func TestHugoPipeline(t *testing.T) {
+func TestHugotPipeline(t *testing.T) {
 	session, err := NewXLASession()
 	check(err)
 
@@ -287,20 +285,9 @@ func TestHugoPipeline(t *testing.T) {
 
 	batch := []string{"what is the capital of the Netherlands?",
 		"who was the first president of the United States?"}
-	// batch := []string{"what is the capital of the Netherlands?"}
 
 	batchResult, err := gemmaPipeline.Run(batch)
 	check(err)
 
 	fmt.Println(batchResult.GetOutput())
-}
-
-func TestTextGenerationPipelineTokensXLA(t *testing.T) {
-	session, err := NewXLASession()
-	checkT(t, err)
-	defer func(session *Session) {
-		destroyErr := session.Destroy()
-		checkT(t, destroyErr)
-	}(session)
-	textGenerationPipelineTokens(t, session)
 }

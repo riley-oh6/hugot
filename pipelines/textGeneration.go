@@ -64,7 +64,7 @@ func NewTextGenerationPipeline(config pipelineBackends.PipelineConfig[*TextGener
 	}
 
 	if pipeline.MaxNewTokens <= 0 {
-		pipeline.MaxNewTokens = 500 // Default value if not set
+		pipeline.MaxNewTokens = 524 // Default value if not set
 	}
 
 	configPath := util.PathJoinSafe(model.Path, "config.json")
@@ -82,6 +82,11 @@ func NewTextGenerationPipeline(config pipelineBackends.PipelineConfig[*TextGener
 	pipeline.HeadDim = pipelineInputConfig.HeadDim
 	pipeline.NumHiddenLayers = pipelineInputConfig.NumHiddenLayers
 	pipeline.EosTokenID = pipelineInputConfig.EosTokenID
+
+	err = pipeline.Validate()
+	if err != nil {
+		return nil, err
+	}
 	return pipeline, nil
 }
 
@@ -110,7 +115,20 @@ func (p *TextGenerationPipeline) GetStats() []string {
 }
 
 func (p *TextGenerationPipeline) Validate() error {
-	return nil
+	var validationErrors []error
+	if len(p.EosTokenID) == 0 {
+		validationErrors = append(validationErrors, fmt.Errorf("no EOS Token IDs found"))
+	}
+	if p.NumHiddenLayers == 0 {
+		validationErrors = append(validationErrors, fmt.Errorf("num hidden layers cannot be 0"))
+	}
+	if p.NumKeyValueHeads == 0 {
+		validationErrors = append(validationErrors, fmt.Errorf("num key value heads cannot be 0"))
+	}
+	if p.HeadDim == 0 {
+		validationErrors = append(validationErrors, fmt.Errorf("head dim cannot be 0"))
+	}
+	return errors.Join(validationErrors...)
 }
 
 func CreateCache(batchSize, numLayers, numKeyValueHeads, seqLen, headDim int) []*tensors.Tensor {
@@ -166,7 +184,11 @@ func (p *TextGenerationPipeline) Postprocess(batch *pipelineBackends.PipelineBat
 			convertedTokens[j] = uint32(tok)
 		}
 
-		decodedString, _ := pipelineBackends.Decode(convertedTokens, p.Model.Tokenizer, true)
+		decodedString, err := pipelineBackends.Decode(convertedTokens, p.Model.Tokenizer, true)
+
+		if err != nil {
+			return nil, fmt.Errorf("error in decoding generated tokens")
+		}
 		output.TextGenerationOutputs[i] = decodedString
 	}
 

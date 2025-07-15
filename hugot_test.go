@@ -871,12 +871,8 @@ func destroyPipelines(t *testing.T, session *Session) {
 }
 
 // Text Generation
-func textGenerationPipelineTokens(t *testing.T, session *Session) {
+func textGenerationPipeline(t *testing.T, session *Session) {
 	t.Helper()
-
-	// Create a new session
-	session, err := NewXLASession()
-	checkT(t, err)
 
 	defer func(session *Session) {
 		err := session.Destroy()
@@ -969,6 +965,44 @@ func textGenerationPipelineTokens(t *testing.T, session *Session) {
 
 		})
 	}
+}
+
+func textGenPipelineValidation(t *testing.T, session *Session) {
+	t.Helper()
+
+	defer func(session *Session) {
+		err := session.Destroy()
+		checkT(t, err)
+	}(session)
+
+	// Configure the text generation pipeline
+	config := TextGenerationConfig{
+		ModelPath:    "/home/testuser/repositories/onnx_models",
+		Name:         "test pipeline",
+		OnnxFilename: "gemma_model.onnx",
+		Options: []pipelineBackends.PipelineOption[*pipelines.TextGenerationPipeline]{
+			pipelines.WithMaxTokens(15),
+		},
+	}
+
+	// Create the pipeline
+	pipeline, err := NewPipeline(session, config)
+	checkT(t, err)
+
+	pipeline.NumHiddenLayers = 0
+	err = pipeline.Validate()
+	assert.Error(t, err)
+	pipeline.NumHiddenLayers = 1
+
+	pipeline.NumKeyValueHeads = 0
+	err = pipeline.Validate()
+	assert.Error(t, err)
+	pipeline.NumKeyValueHeads = 1
+
+	pipeline.HeadDim = 0
+	err = pipeline.Validate()
+	assert.Error(t, err)
+	pipeline.HeadDim = 1
 }
 
 // Thread safety
