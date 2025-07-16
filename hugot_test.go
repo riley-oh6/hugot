@@ -881,9 +881,9 @@ func textGenerationPipeline(t *testing.T, session *Session) {
 
 	// Configure the text generation pipeline
 	config := TextGenerationConfig{
-		ModelPath:    "/home/testuser/repositories/onnx_models",
-		Name:         "test pipeline",
-		OnnxFilename: "gemma_model.onnx",
+		ModelPath:    "./models/KnightsAnalytics_gemma-3-1b-it-ONNX",
+		Name:         "testPipeline",
+		OnnxFilename: "model.onnx",
 		Options: []pipelineBackends.PipelineOption[*pipelines.TextGenerationPipeline]{
 			pipelines.WithMaxTokens(15),
 		},
@@ -977,9 +977,9 @@ func textGenPipelineValidation(t *testing.T, session *Session) {
 
 	// Configure the text generation pipeline
 	config := TextGenerationConfig{
-		ModelPath:    "/home/testuser/repositories/onnx_models",
-		Name:         "test pipeline",
-		OnnxFilename: "gemma_model.onnx",
+		ModelPath:    "./models/KnightsAnalytics_gemma-3-1b-it-ONNX",
+		Name:         "testPipeline",
+		OnnxFilename: "model.onnx",
 		Options: []pipelineBackends.PipelineOption[*pipelines.TextGenerationPipeline]{
 			pipelines.WithMaxTokens(15),
 		},
