@@ -17,6 +17,7 @@ import (
 type Model struct {
 	Path                  string
 	OnnxFilename          string
+	OnnxFilePath          string
 	OnnxBytes             []byte
 	ORTModel              *ORTModel
 	GoMLXModel            *GoMLXModel
@@ -105,7 +106,7 @@ func LoadOnnxModelBytes(model *Model) error {
 	}
 
 	model.OnnxBytes = onnxBytes
-
+	model.OnnxFilePath = modelOnnxFile
 	return err
 }
 

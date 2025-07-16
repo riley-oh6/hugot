@@ -31,8 +31,16 @@ type GoMLXModel struct {
 	Destroy   func()
 }
 
-func loadExternalData(baseDirectory string, model *onnx.Model) error {
+func loadExternalData(path string, model *onnx.Model) error {
 	externalMap := map[string][]byte{}
+	// load external data from same dir as the base model ONNX file
+	lastSlashIndex := strings.LastIndex(path, "/")
+	if lastSlashIndex == -1 {
+		// No slash found
+		return fmt.Errorf("invalid path for external data: %s", path)
+	} else {
+		path = path[:lastSlashIndex]
+	}
 
 	for _, proto := range model.Proto.Graph.Initializer {
 		// proto.Datalocation is 1 if data is external, 0 otherwise
@@ -60,7 +68,7 @@ func loadExternalData(baseDirectory string, model *onnx.Model) error {
 				}
 			}
 
-			weightsPath := util.PathJoinSafe(baseDirectory, externalPath)
+			weightsPath := util.PathJoinSafe(path, externalPath)
 
 			if _, ok := externalMap[externalPath]; !ok {
 				bytes, err := util.ReadFileBytes(weightsPath)
@@ -157,7 +165,7 @@ func createGoMLXModelBackend(model *Model, options *options.Options) error {
 			outputNames = append(outputNames, v.Name)
 		}
 
-		if insideError = loadExternalData(model.Path, modelParsed); insideError != nil {
+		if insideError = loadExternalData(model.OnnxFilePath, modelParsed); insideError != nil {
 			return
 		}
 
@@ -316,9 +324,8 @@ func createInputTensorsGoMLX(batch *PipelineBatch, inputsMeta []InputOutputInfo,
 }
 
 func CreateGenerativeInputTensorsGoMLX(batch *PipelineBatch) error {
-	var maxSequenceLength int
 	for _, i := range batch.Input {
-		batch.MaxSequenceLength = max(maxSequenceLength, len(i.TokenIDs))
+		batch.MaxSequenceLength = max(batch.MaxSequenceLength, len(i.TokenIDs))
 	}
 	batchSize := len(batch.Input)
 	maxSeqLength := batch.MaxSequenceLength

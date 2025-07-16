@@ -940,6 +940,7 @@ func textGenerationPipeline(t *testing.T, session *Session) {
 
 	// Execute tests
 	for _, tt := range tests {
+		fmt.Println(tt.name)
 		t.Run(tt.name, func(t *testing.T) {
 			batch := pipelineBackends.NewBatch()
 			batch.MaxNewTokens = 15
