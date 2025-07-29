@@ -226,6 +226,29 @@ func TestZeroShotClassificationPipelineValidationORT(t *testing.T) {
 	zeroShotClassificationPipelineValidation(t, session)
 }
 
+// Text generation
+
+func TestTextGenerationPipelineORT(t *testing.T) {
+	session, err := NewORTSession()
+	checkT(t, err)
+	defer func(session *Session) {
+		destroyErr := session.Destroy()
+		checkT(t, destroyErr)
+	}(session)
+	textGenerationPipeline(t, session)
+}
+
+func TestTextGenerationPipelineValidationORT(t *testing.T) {
+	opts := []options.WithOption{options.WithOnnxLibraryPath(onnxRuntimeSharedLibrary)}
+	session, err := NewORTSession(opts...)
+	checkT(t, err)
+	defer func(session *Session) {
+		destroyErr := session.Destroy()
+		checkT(t, destroyErr)
+	}(session)
+	textGenerationPipelineValidation(t, session)
+}
+
 // No Same Name
 
 func TestNoSameNamePipelineORT(t *testing.T) {

@@ -5,6 +5,9 @@ package pipelineBackends
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	ort "github.com/yalue/onnxruntime_go"
 
@@ -18,6 +21,20 @@ type ORTModel struct {
 }
 
 func createORTModelBackend(model *Model, options *options.Options) error {
+
+	// TODO: currently models with external data can only load from regular filesystems
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	pathChanged := false
+	if !strings.HasPrefix(model.Path, "s3:") {
+		err = os.Chdir(model.Path)
+		if err != nil {
+			return err
+		}
+		pathChanged = true
+	}
 
 	sessionOptions := options.BackendOptions.(*ort.SessionOptions)
 
@@ -49,8 +66,11 @@ func createORTModelBackend(model *Model, options *options.Options) error {
 	}}
 	model.InputsMeta = inputs
 	model.OutputsMeta = outputs
+	if pathChanged {
+		err = os.Chdir(cwd)
+	}
 
-	return nil
+	return err
 }
 
 func loadInputOutputMetaORT(onnxBytes []byte) ([]InputOutputInfo, []InputOutputInfo, error) {
@@ -118,6 +138,127 @@ func createInputTensorsORT(batch *PipelineBatch, model *Model) error {
 	return nil
 }
 
+func CreateGenerativeInputTensorsORT(batch *PipelineBatch, model *Model) error {
+	for _, i := range batch.Input {
+		batch.MaxSequenceLength = max(batch.MaxSequenceLength, len(i.TokenIDs))
+	}
+
+	batchSize := len(batch.Input)
+	maxSeqLength := batch.MaxSequenceLength
+	tensorSize := batchSize * maxSeqLength
+
+	// filter out cache inputs
+	filteredInputsMeta := make([]InputOutputInfo, 0, len(model.InputsMeta))
+	for _, meta := range model.InputsMeta {
+		if !strings.HasPrefix(meta.Name, "past_key") {
+			filteredInputsMeta = append(filteredInputsMeta, meta)
+		}
+	}
+
+	inputTensors := make([]ort.Value, len(filteredInputsMeta))
+	var tensorCreationErr error
+	paddingMasks := make([][]bool, batchSize)
+
+	for i, inputMeta := range filteredInputsMeta {
+		backingSlice := make([]int64, tensorSize)
+		counter := 0
+
+		for j, input := range batch.Input {
+			seq := input.TokenIDs
+			seqLen := len(seq)
+			padLen := maxSeqLength - seqLen
+			inputPaddingMask := make([]bool, maxSeqLength)
+
+			for k := range maxSeqLength {
+				switch inputMeta.Name {
+				case "input_ids":
+					if k < padLen {
+						backingSlice[counter] = 0 // padding
+						inputPaddingMask[k] = false
+					} else {
+						backingSlice[counter] = int64(seq[k-padLen])
+						inputPaddingMask[k] = true
+					}
+				case "position_ids":
+					backingSlice[counter] = int64(k + 1)
+				case "attention_mask":
+					if k < padLen {
+						backingSlice[counter] = 0 // padding
+					} else {
+						backingSlice[counter] = 1 // attention
+					}
+				default:
+					return fmt.Errorf("input %s not recognized", inputMeta.Name)
+				}
+				counter++
+			}
+
+			if inputMeta.Name == "input_ids" {
+				paddingMasks[j] = inputPaddingMask
+			}
+		}
+
+		inputTensors[i], tensorCreationErr = ort.NewTensor(ort.NewShape(int64(batchSize), int64(maxSeqLength)), backingSlice)
+		if tensorCreationErr != nil {
+			return tensorCreationErr
+		}
+	}
+
+	cache, err := CreateCacheORT(batchSize, model.NumHiddenLayers, model.NumKeyValueHeads, model.FixedCacheSize, model.HeadDim)
+	if err != nil {
+		return err
+	}
+
+	batch.InputValues = append(inputTensors, cache...)
+	batch.PaddingMask = paddingMasks
+	batch.DestroyInputs = func() error {
+		var destroyError error
+		for _, ortTensor := range inputTensors {
+			destroyError = errors.Join(destroyError, ortTensor.Destroy())
+		}
+		return destroyError
+	}
+
+	return nil
+}
+
+func CreateCacheORT(batchSize, numLayers, numKeyValueHeads, maxSeqLen, headDim int) ([]ort.Value, error) {
+	cache := make([]ort.Value, numLayers*2)
+	tensorSize := batchSize * numKeyValueHeads * maxSeqLen * headDim
+	for layer := range numLayers {
+		keySlice := make([]float32, tensorSize)
+		keyTensor, err := ort.NewTensor(
+			ort.NewShape(int64(batchSize), int64(numKeyValueHeads), int64(maxSeqLen), int64(headDim)),
+			keySlice,
+		)
+		if err != nil {
+			for i := 0; i < layer*2; i++ {
+				if cache[i] != nil {
+					errors.Join(err, cache[i].Destroy())
+				}
+			}
+			return nil, err
+		}
+		cache[layer*2] = keyTensor
+		valueSlice := make([]float32, tensorSize)
+		valueTensor, err := ort.NewTensor(
+			ort.NewShape(int64(batchSize), int64(numKeyValueHeads), int64(maxSeqLen), int64(headDim)),
+			valueSlice,
+		)
+		if err != nil {
+			errors.Join(err, keyTensor.Destroy())
+			for i := 0; i < layer*2; i++ {
+				if cache[i] != nil {
+					errors.Join(err, cache[i].Destroy())
+				}
+			}
+			return nil, err
+		}
+		cache[layer*2+1] = valueTensor
+	}
+	return cache, nil
+}
+
 func runORTSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 	actualBatchSize := int64(len(batch.Input))
 	maxSequenceLength := int64(batch.MaxSequenceLength)
@@ -177,6 +318,168 @@ func runORTSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 	batch.OutputValues = convertedOutput
 
 	return err
+}
+
+func argmax(logits [][][]float32) []int64 {
+	batchSize := len(logits)
+	if batchSize == 0 {
+		return nil
+	}
+
+	output := make([]int64, batchSize)
+	for i := range output {
+		if len(logits[i]) == 0 {
+			output[i] = 0
+			continue
+		}
+
+		lastTokenLogits := logits[i][len(logits[i])-1]
+
+		maxIdx := 0
+		maxVal := lastTokenLogits[0]
+		for j, val := range lastTokenLogits[1:] {
+			if val > maxVal {
+				maxVal = val
+				maxIdx = j + 1
+			}
+		}
+
+		output[i] = int64(maxIdx)
+	}
+
+	return output
+}
+
+func runGenerativeORTSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
+	start := time.Now()
+	batchSize := int64(len(batch.Input))
+	generatedTokens := make([][]int64, batchSize)
+	eosTokenIDs := p.Model.EosTokenIDs
+
+	// Map input metadata for intelligent ordering
+	inputMetaMap := make(map[string]int)
+	for i, inputMeta := range p.Model.InputsMeta {
+		inputMetaMap[inputMeta.Name] = i
+	}
+
+iterations:
+	for step := 0; step < batch.MaxNewTokens; step++ {
+		inputTensors := batch.InputValues.([]ort.Value)
+		outputTensors := make([]ort.Value, len(p.Model.OutputsMeta))
+		errOnnx := p.Model.ORTModel.Session.Run(inputTensors, outputTensors)
+		if errOnnx != nil {
+			return errOnnx
+		}
+
+		logits := outputTensors[0].(*ort.Tensor[float32]).GetData()
+		var logitsReshaped [][][]float32
+		if step == 0 {
+			dimensions := p.Model.OutputsMeta[0].Dimensions.ValuesInt()
+			logitsReshaped = flatDataTo3D(logits, batch.PaddingMask, batch.MaxSequenceLength, dimensions[len(dimensions)-1])
+		} else {
+			// after the first iteration, the shape of the logits is (batchSize, 1, vocabSize) so this is handled differently
+			logitsReshaped = flatDataTo3DGenerativeLoop(logits, batchSize, int64(p.Model.VocabSize))
+		}
+
+		// this matches the python implementation where it will continue to alternate between newline and
+		// EOS until the longest output sequence terminates
+		finish := true
+		// should give an array of batchSize amount of tokens
+		greedyTokens := argmax(logitsReshaped)
+		for i, greedyToken := range greedyTokens {
+			generatedTokens[i] = append(generatedTokens[i], greedyToken)
+			finish = finish && eosTokenIDs[greedyToken]
+		}
+
+		if finish {
+			break iterations
+		}
+
+		// initialize next loop in correct order of the input metadata
+		newModelInputs := make([]ort.Value, len(p.Model.InputsMeta))
+		for i, inputMeta := range p.Model.InputsMeta {
+			switch inputMeta.Name {
+			case "input_ids":
+				generatedTokenTensor, err := ort.NewTensor(
+					ort.NewShape(batchSize, 1),
+					greedyTokens,
+				)
+				if err != nil {
+					return err
+				}
+				newModelInputs[i] = generatedTokenTensor
+
+			case "position_ids":
+				positionIDs := inputTensors[inputMetaMap["position_ids"]].(*ort.Tensor[int64]).GetData()
+				flatPositionIDs := flatDataTo2D(
+					positionIDs,
+					batch.PaddingMask,
+					len(positionIDs)/int(batchSize),
+				)
+				newPositionIDs := make([]int64, batchSize)
+				for j, flatPositionID := range flatPositionIDs {
+					newPositionIDs[j] = flatPositionID[len(flatPositionID)-1] + 1
+				}
+				newPositionIDsTensor, err := ort.NewTensor(
+					ort.NewShape(batchSize, 1),
+					newPositionIDs,
+				)
+				if err != nil {
+					return err
+				}
+				newModelInputs[i] = newPositionIDsTensor
+
+			case "attention_mask":
+				attentionMask := inputTensors[inputMetaMap["attention_mask"]].(*ort.Tensor[int64]).GetData()
+				flatAttentionMask := flatDataTo2D(
+					attentionMask,
+					batch.PaddingMask,
+					len(attentionMask)/int(batchSize),
+				)
+				newAttentionMask := make([]int64, batchSize*int64(len(flatAttentionMask[0])+1))
+				counter := 0
+				for j := range flatAttentionMask {
+					for k := range flatAttentionMask[j] {
+						newAttentionMask[counter] = flatAttentionMask[j][k]
+						counter++
+					}
+					newAttentionMask[counter] = 1
+					counter++
+				}
+				newAttentionMaskTensor, err := ort.NewTensor(
+					ort.NewShape(batchSize, int64(len(flatAttentionMask[0])+1)),
+					newAttentionMask,
+				)
+				if err != nil {
+					return err
+				}
+				newModelInputs[i] = newAttentionMaskTensor
+
+			default:
+				// handle cache inputs (past_key_values, etc.)
+				if strings.HasPrefix(inputMeta.Name, "past_key") {
+					cacheInputIndex := 0
+					for j, meta := range p.Model.InputsMeta {
+						if j < i && strings.HasPrefix(meta.Name, "past_key") {
+							cacheInputIndex++
+						}
+					}
+					newModelInputs[i] = outputTensors[1+cacheInputIndex]
+				} else {
+					return fmt.Errorf("unhandled input type: %s", inputMeta.Name)
+				}
+			}
+		}
+
+		batch.InputValues = newModelInputs
+	}
+
+	batch.OutputValues = make([]any, batchSize)
+	for i := range generatedTokens {
+		batch.OutputValues[i] = generatedTokens[i]
+	}
+	fmt.Println(time.Since(start))
+	return nil
 }
 
 func convertORTInputOutputs(inputOutputs []ort.InputOutputInfo) []InputOutputInfo {
