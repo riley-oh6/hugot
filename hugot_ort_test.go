@@ -226,11 +226,9 @@ func TestZeroShotClassificationPipelineValidationORT(t *testing.T) {
 	zeroShotClassificationPipelineValidation(t, session)
 }
 
-// Cross encoder
-
+// Cross Encoder
 func TestCrossEncoderPipelineORT(t *testing.T) {
-	opts := []options.WithOption{options.WithOnnxLibraryPath(onnxRuntimeSharedLibrary)}
-	session, err := NewORTSession(opts...)
+	session, err := NewORTSession()
 	checkT(t, err)
 	defer func(session *Session) {
 		destroyErr := session.Destroy()
@@ -240,6 +238,28 @@ func TestCrossEncoderPipelineORT(t *testing.T) {
 }
 
 func TestCrossEncoderPipelineValidationORT(t *testing.T) {
+	session, err := NewORTSession()
+	checkT(t, err)
+	defer func(session *Session) {
+		destroyErr := session.Destroy()
+		checkT(t, destroyErr)
+	}(session)
+	crossEncoderPipelineValidation(t, session)
+}
+
+// Text generation
+
+func TestTextGenerationPipelineORT(t *testing.T) {
+	session, err := NewORTSession()
+	checkT(t, err)
+	defer func(session *Session) {
+		destroyErr := session.Destroy()
+		checkT(t, destroyErr)
+	}(session)
+	textGenerationPipeline(t, session)
+}
+
+func TestTextGenerationPipelineValidationORT(t *testing.T) {
 	opts := []options.WithOption{options.WithOnnxLibraryPath(onnxRuntimeSharedLibrary)}
 	session, err := NewORTSession(opts...)
 	checkT(t, err)
@@ -247,7 +267,7 @@ func TestCrossEncoderPipelineValidationORT(t *testing.T) {
 		destroyErr := session.Destroy()
 		checkT(t, destroyErr)
 	}(session)
-	crossEncoderPipelineValidation(t, session)
+	textGenerationPipelineValidation(t, session)
 }
 
 // No Same Name

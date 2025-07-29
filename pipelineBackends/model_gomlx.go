@@ -28,8 +28,7 @@ type GoMLXModel struct {
 }
 
 func createGoMLXModelBackend(model *Model, options *options.Options) error {
-	var insideError error
-	var recoverErr error
+	var insideError, recoverErr error
 
 	// we never want to panic so the calling program has a chance to shut down gracefully on error.
 	// we therefore catch all panics from goMLX as errors.

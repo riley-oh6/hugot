@@ -37,6 +37,8 @@ type OrtOptions struct {
 	DirectMLOptions       *int
 	OpenVINOOptions       map[string]string
 	TensorRTOptions       map[string]string
+	BeamSearchNumBeams    *int
+	BeamSearchEnabled     *bool
 }
 
 type GoMLXOptions struct {

@@ -148,11 +148,10 @@ func featureExtractionPipeline(t *testing.T, session *Session) {
 	pipelineSentence, err := NewPipeline(session, configSentence)
 	checkT(t, err)
 
-	outputSentence, err := pipelineSentence.RunPipeline([]string{"Onnxruntime is a great inference backend"})
+	_, err = pipelineSentence.RunPipeline([]string{"Onnxruntime is a great inference backend"})
 	if err != nil {
 		t.FailNow()
 	}
-	fmt.Println(outputSentence.Embeddings[0])
 	configSentence = FeatureExtractionConfig{
 		ModelPath:    modelPath,
 		Name:         "testPipelineToken",
@@ -931,6 +930,118 @@ func destroyPipelines(t *testing.T, session *Session) {
 	if len(session.tokenClassificationPipelines) != 0 {
 		t.Fatal("Session should have 0 token classification pipelines")
 	}
+}
+
+// Text Generation
+func textGenerationPipeline(t *testing.T, session *Session) {
+	t.Helper()
+
+	defer func(session *Session) {
+		err := session.Destroy()
+		checkT(t, err)
+	}(session)
+
+	// Configure the text generation pipeline
+	config := TextGenerationConfig{
+		ModelPath:    "./models/KnightsAnalytics_SmolLM-135M",
+		Name:         "testPipeline",
+		OnnxFilename: "model_int8.onnx",
+		Options: []pipelineBackends.PipelineOption[*pipelines.TextGenerationPipeline]{
+			pipelines.WithMaxTokens(50),
+		},
+	}
+
+	// Create the pipeline
+	textGenPipeline, err := NewPipeline(session, config)
+	checkT(t, err)
+
+	tests := []struct {
+		name           string
+		input          []string
+		expectedString []string
+	}{
+		{
+			name:  "small test",
+			input: []string{"what is the capital of the Netherlands?"},
+			expectedString: []string{
+				"\n- What is the capital of the Netherlands?\n- What is the capital of the Netherlands?\n- What is the capital of the Netherlands?\n- What is the capital of the Netherlands?\n- What is the capital of the Netherlands?",
+			},
+		},
+		{
+			name: "batched input, short sequence first, long sequence second",
+			input: []string{
+				"what is the capital of the Netherlands?",
+				"who was the first president of the United States?",
+			},
+			expectedString: []string{
+				"\n- 12 What is the capital of the Netherlands?\n- 13 What is the capital of the Netherlands?\n- 14 What is the capital of the Netherlands?\n- 15 What is the capital of the",
+				"\nWhat is the first president of the United States called?\nWhat is the first president of the United States called?\nWhat is the first president of the United States called?\nWhat is the first president of the United States called?\nWhat",
+			},
+		},
+		{
+			name: "batched input, long sequence first, short sequence second",
+			input: []string{
+				"who was the fourty third president of the United States?",
+				"who is the president of the Netherlands?",
+			},
+			expectedString: []string{
+				"\nWhat is the name of the country that is located in the middle of the world?\nWhat is the name of the country that is located in the middle of the world?\nWhat is the name of the country that is located in the middle",
+				"\n- 19 How many presidents are there in the world?\n- 20 What is the most powerful president?\n- 21 What is the most powerful president?\n- 22 What is the most powerful president?",
+			},
+		},
+	}
+
+	// Execute tests
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			batchResult, err := textGenPipeline.Run(tt.input)
+			checkT(t, err)
+			outputString := batchResult.GetOutput()
+			for i := range len(outputString) {
+				actualString := tt.expectedString[i]
+				generatedString := outputString[i].(string)
+				assert.Equal(t, actualString, generatedString)
+			}
+		})
+	}
+}
+
+func textGenerationPipelineValidation(t *testing.T, session *Session) {
+	t.Helper()
+
+	defer func(session *Session) {
+		err := session.Destroy()
+		checkT(t, err)
+	}(session)
+
+	// Configure the text generation pipeline
+	config := TextGenerationConfig{
+		ModelPath:    "./models/KnightsAnalytics_SmolLM-135M",
+		Name:         "testPipeline",
+		OnnxFilename: "model_int8.onnx",
+		Options: []pipelineBackends.PipelineOption[*pipelines.TextGenerationPipeline]{
+			pipelines.WithMaxTokens(1),
+		},
+	}
+
+	// Create the pipeline
+	pipeline, err := NewPipeline(session, config)
+	checkT(t, err)
+
+	pipeline.Model.NumHiddenLayers = 0
+	err = pipeline.Validate()
+	assert.Error(t, err)
+	pipeline.Model.NumHiddenLayers = 1
+
+	pipeline.Model.NumKeyValueHeads = 0
+	err = pipeline.Validate()
+	assert.Error(t, err)
+	pipeline.Model.NumKeyValueHeads = 1
+
+	pipeline.Model.HeadDim = 0
+	err = pipeline.Validate()
+	assert.Error(t, err)
+	pipeline.Model.HeadDim = 1
 }
 
 // Thread safety

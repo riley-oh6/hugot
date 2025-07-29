@@ -14,19 +14,19 @@ type downloadModel struct {
 	onnxFilePath string
 }
 
-var models []downloadModel = []downloadModel{
+var models = []downloadModel{
 	{"KnightsAnalytics/all-MiniLM-L6-v2", ""},
 	{"KnightsAnalytics/deberta-v3-base-zeroshot-v1", ""},
 	{"KnightsAnalytics/distilbert-base-uncased-finetuned-sst-2-english", ""},
 	{"KnightsAnalytics/distilbert-NER", ""},
 	{"KnightsAnalytics/roberta-base-go_emotions", ""},
 	{"KnightsAnalytics/jina-reranker-v1-tiny-en", "model.onnx"},
+	{"KnightsAnalytics/SmolLM-135M", "model_int8.onnx"},
 }
 
 func main() {
 	if ok, err := util.FileExists("./models"); err == nil {
 		if !ok {
-
 			err = os.MkdirAll("./models", os.ModePerm)
 			if err != nil {
 				panic(err)

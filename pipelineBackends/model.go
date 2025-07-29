@@ -35,6 +35,8 @@ type Model struct {
 	FirstIteration        bool
 	FixedCacheSize        int
 	VocabSize             int
+	BeamSearchEnabled     bool
+	BeamSearchNumBeams    int
 }
 
 func LoadModel(path string, onnxFilename string, options *options.Options) (*Model, error) {
@@ -59,11 +61,14 @@ func LoadModel(path string, onnxFilename string, options *options.Options) (*Mod
 		return nil, err
 	}
 
+	// for generative models that don't have head dim defined in config (example Phi)
+	// infer from cache entries, only if HeadDim hasn't been initialized yet
 	if model.HeadDim == 0 {
 		for _, inputMeta := range model.InputsMeta {
 			if strings.HasPrefix(inputMeta.Name, "past_key") {
 				dims := inputMeta.Dimensions.ValuesInt()
 				model.HeadDim = dims[len(dims)-1]
+				break
 			}
 		}
 	}
@@ -217,8 +222,7 @@ func loadModelConfig(model *Model) error {
 				model.HeadDim = int(headDimValue)
 			} else {
 				return errors.New("num_key_value_heads is not a number")
-			} // read metadata, look for cache entry and take the correct dimension
-			// this has to happen outside of this because model input/output metadata not yet known
+			}
 		}
 
 		if vocabSize, exists := configMap["vocab_size"]; exists {
@@ -272,8 +276,7 @@ func loadModelConfig(model *Model) error {
 	return nil
 }
 
-func ReshapeOutput[T float32 | int64](input []T, meta InputOutputInfo, batchSize int, paddingMask [][]bool, sequenceLength int) any {
-
+func ReshapeOutput[T float32 | int64 | int32](input []T, meta InputOutputInfo, batchSize int, paddingMask [][]bool, sequenceLength int) any {
 	var outArray any
 	dimensions := meta.Dimensions.ValuesInt()
 	lenDimensions := len(dimensions)
@@ -282,11 +285,15 @@ func ReshapeOutput[T float32 | int64](input []T, meta InputOutputInfo, batchSize
 		outArray = flatDataTo2D(input, batchSize, dimensions[lenDimensions-1])
 	case 3:
 		outArray = flatDataTo3D(input, paddingMask, sequenceLength, dimensions[lenDimensions-1])
+	case 4:
+		dimension := dimensions[3]
+		groupSize := dimensions[1]
+		outArray = flatDataTo4D(input, paddingMask, groupSize, dimension)
 	}
 	return outArray
 }
 
-func flatDataTo2D[T float32 | int64](input []T, batchSize int, dimension int) [][]T {
+func flatDataTo2D[T float32 | int64 | int32](input []T, batchSize int, dimension int) [][]T {
 	// Input string, token, dimension
 	output := make([][]T, batchSize)
 
@@ -305,7 +312,7 @@ func flatDataTo2D[T float32 | int64](input []T, batchSize int, dimension int) []
 	return output
 }
 
-func flatDataTo3D[T float32 | int64](input []T, paddingMask [][]bool, sequenceLength int, dimension int) [][][]T {
+func flatDataTo3D[T float32 | int64 | int32](input []T, paddingMask [][]bool, sequenceLength int, dimension int) [][][]T {
 	// Input string, token, dimension
 	output := make([][][]T, len(paddingMask))
 
@@ -335,5 +342,45 @@ func flatDataTo3D[T float32 | int64](input []T, paddingMask [][]bool, sequenceLe
 		output[batchIndex] = tokenEmbeddings
 	}
 
+	return output
+}
+
+func flatDataTo3DGenerativeLoop[T float32 | int64 | int32](input []T, batchSize int64, vocabSize int64) [][][]T {
+	result := make([][][]T, batchSize)
+	for i := range batchSize {
+		start := i * vocabSize
+		result[i] = [][]T{input[start : start+vocabSize]}
+	}
+	return result
+}
+
+func flatDataTo4D[T float32 | int64 | int32](input []T, paddingMask [][]bool, groupSize int, dimension int) [][][][]T {
+	batchSize := len(paddingMask)         // B
+	sequenceLength := len(paddingMask[0]) // S
+	output := make([][][][]T, batchSize)
+	counter := 0
+
+	for b := 0; b < batchSize; b++ {
+		group := make([][][]T, groupSize) // A
+		for a := 0; a < groupSize; a++ {
+			sequence := make([][]T, sequenceLength)
+			for s := 0; s < sequenceLength; s++ {
+				if !paddingMask[b][s] {
+					// skip this entire vector
+					counter += dimension
+					sequence[s] = make([]T, dimension) // fill with zeros or ignore
+					continue
+				}
+				vector := make([]T, dimension)
+				for d := 0; d < dimension; d++ {
+					vector[d] = input[counter]
+					counter++
+				}
+				sequence[s] = vector
+			}
+			group[a] = sequence
+		}
+		output[b] = group
+	}
 	return output
 }
