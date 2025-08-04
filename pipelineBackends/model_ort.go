@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	ort "github.com/yalue/onnxruntime_go"
 
@@ -353,8 +352,9 @@ func argmax(logits [][][]float32) []int64 {
 
 // runGenerativeORTSessionOnBatch runs the generative loop for text generation
 func runGenerativeORTSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
-	start := time.Now()
-	batchSize := int64(len(batch.Input))
+
+	batchSize := len(batch.Input)
+	batchSize64 := int64(batchSize)
 	generatedTokens := make([][]int64, batchSize)
 	eosTokenIDs := p.Model.EosTokenIDs
 
@@ -364,6 +364,8 @@ func runGenerativeORTSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error
 		inputMetaMap[inputMeta.Name] = i
 	}
 
+	finish := make([]bool, batchSize)
+	finishCount := 0
 iterations:
 	for step := 0; step < batch.MaxNewTokens; step++ {
 		inputTensors := batch.InputValues.([]ort.Value)
@@ -380,20 +382,21 @@ iterations:
 			logitsReshaped = flatDataTo3D(logits, batch.PaddingMask, batch.MaxSequenceLength, dimensions[len(dimensions)-1])
 		} else {
 			// after the first iteration, the shape of the logits is (batchSize, 1, vocabSize) so this is handled differently
-			logitsReshaped = flatDataTo3DGenerativeLoop(logits, batchSize, int64(p.Model.VocabSize))
+			logitsReshaped = flatDataTo3DGenerativeLoop(logits, batchSize64, int64(p.Model.VocabSize))
 		}
 
 		// this matches the python implementation where it will continue to alternate between newline and
 		// EOS until the longest output sequence terminates
-		finish := true
 		// should give an array of batchSize amount of tokens
 		greedyTokens := argmax(logitsReshaped)
 		for i, greedyToken := range greedyTokens {
 			generatedTokens[i] = append(generatedTokens[i], greedyToken)
-			finish = finish && eosTokenIDs[greedyToken]
+			if !finish[i] && eosTokenIDs[greedyToken] {
+				finish[i] = true
+				finishCount++
+			}
 		}
-
-		if finish {
+		if finishCount == batchSize {
 			break iterations
 		}
 
@@ -403,7 +406,7 @@ iterations:
 			switch inputMeta.Name {
 			case "input_ids":
 				generatedTokenTensor, err := ort.NewTensor(
-					ort.NewShape(batchSize, 1),
+					ort.NewShape(batchSize64, 1),
 					greedyTokens,
 				)
 				if err != nil {
@@ -423,7 +426,7 @@ iterations:
 					newPositionIDs[j] = flatPositionID[len(flatPositionID)-1] + 1
 				}
 				newPositionIDsTensor, err := ort.NewTensor(
-					ort.NewShape(batchSize, 1),
+					ort.NewShape(batchSize64, 1),
 					newPositionIDs,
 				)
 				if err != nil {
@@ -438,7 +441,7 @@ iterations:
 					batch.PaddingMask,
 					len(attentionMask)/int(batchSize),
 				)
-				newAttentionMask := make([]int64, batchSize*int64(len(flatAttentionMask[0])+1))
+				newAttentionMask := make([]int64, batchSize64*int64(len(flatAttentionMask[0])+1))
 				counter := 0
 				for j := range flatAttentionMask {
 					for k := range flatAttentionMask[j] {
@@ -449,7 +452,7 @@ iterations:
 					counter++
 				}
 				newAttentionMaskTensor, err := ort.NewTensor(
-					ort.NewShape(batchSize, int64(len(flatAttentionMask[0])+1)),
+					ort.NewShape(batchSize64, int64(len(flatAttentionMask[0])+1)),
 					newAttentionMask,
 				)
 				if err != nil {
@@ -480,7 +483,6 @@ iterations:
 	for i := range generatedTokens {
 		batch.OutputValues[i] = generatedTokens[i]
 	}
-	fmt.Println(time.Since(start))
 	return nil
 }
 
