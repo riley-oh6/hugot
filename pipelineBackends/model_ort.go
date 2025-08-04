@@ -390,10 +390,12 @@ iterations:
 		// should give an array of batchSize amount of tokens
 		greedyTokens := argmax(logitsReshaped)
 		for i, greedyToken := range greedyTokens {
-			generatedTokens[i] = append(generatedTokens[i], greedyToken)
-			if !finish[i] && eosTokenIDs[greedyToken] {
-				finish[i] = true
-				finishCount++
+			if !finish[i] {
+				generatedTokens[i] = append(generatedTokens[i], greedyToken)
+				if eosTokenIDs[greedyToken] {
+					finish[i] = true
+					finishCount++
+				}
 			}
 		}
 		if finishCount == batchSize {
