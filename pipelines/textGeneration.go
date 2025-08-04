@@ -1,12 +1,15 @@
 package pipelines
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
 	"sync/atomic"
+	"text/template"
 	"time"
 
+	"github.com/knights-analytics/hugot/chatTemplates"
 	"github.com/knights-analytics/hugot/options"
 	"github.com/knights-analytics/hugot/pipelineBackends"
 )
@@ -16,10 +19,23 @@ type TextGenerationPipeline struct {
 	MaxNewTokens int
 	OutputName   string
 	Output       pipelineBackends.InputOutputInfo
+	Template     *template.Template
+	EosToken     string
 }
 
 type TextGenerationOutput struct {
 	TextGenerationOutputs []string
+}
+
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type TemplateData struct {
+	Messages            []Message `json:"messages"`
+	AddGenerationPrompt bool      `json:"add_generation_prompt"`
+	EosToken            string    `json:"eos_token"`
 }
 
 func (t *TextGenerationOutput) GetOutput() []any {
@@ -30,9 +46,32 @@ func (t *TextGenerationOutput) GetOutput() []any {
 	return out
 }
 
+// WithMaxTokens allows the user to define the maximum generated tokens
 func WithMaxTokens(maxToken int) pipelineBackends.PipelineOption[*TextGenerationPipeline] {
 	return func(pipeline *TextGenerationPipeline) error {
 		pipeline.MaxNewTokens = maxToken
+		return nil
+	}
+}
+
+func WithGemmaTemplate() pipelineBackends.PipelineOption[*TextGenerationPipeline] {
+	return func(pipeline *TextGenerationPipeline) error {
+		tmpl, err := template.New("gemma").Funcs(chatTemplates.FuncMap).Parse(chatTemplates.GemmaTemplate)
+		if err != nil {
+			return errors.New("parsing of gemma template failed")
+		}
+		pipeline.Template = tmpl
+		return nil
+	}
+}
+
+func WithPhiTemplate() pipelineBackends.PipelineOption[*TextGenerationPipeline] {
+	return func(pipeline *TextGenerationPipeline) error {
+		tmpl, err := template.New("phi").Funcs(chatTemplates.FuncMap).Parse(chatTemplates.PhiTemplate)
+		if err != nil {
+			return errors.New("parsing of gemma template failed")
+		}
+		pipeline.Template = tmpl
 		return nil
 	}
 }
@@ -112,7 +151,7 @@ func (p *TextGenerationPipeline) Preprocess(batch *pipelineBackends.PipelineBatc
 	atomic.AddUint64(&p.Model.Tokenizer.TokenizerTimings.NumCalls, 1)
 	atomic.AddUint64(&p.Model.Tokenizer.TokenizerTimings.TotalNS, uint64(time.Since(start)))
 
-	return pipelineBackends.CreateGenerativeInputTensors(batch, p.Runtime, p.Model)
+	return pipelineBackends.CreateGenerativeInputTensors(batch, p.Model, p.Runtime)
 }
 
 func (p *TextGenerationPipeline) Forward(batch *pipelineBackends.PipelineBatch) error {
@@ -153,6 +192,35 @@ func (p *TextGenerationPipeline) Postprocess(batch *pipelineBackends.PipelineBat
 
 func (p *TextGenerationPipeline) Run(inputs []string) (pipelineBackends.PipelineBatchOutput, error) {
 	return p.RunPipeline(inputs)
+}
+
+func executeTemplate(tmpl *template.Template, data TemplateData) (string, error) {
+	var buf bytes.Buffer
+	err := tmpl.Execute(&buf, data)
+	if err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+func (p *TextGenerationPipeline) RunWithTemplate(inputs [][]Message) (pipelineBackends.PipelineBatchOutput, error) {
+	// apply template to messages, returning []string
+	// if template is not compliled, return error
+	templatedMessages := make([]string, len(inputs))
+
+	for i, message := range inputs {
+		data := TemplateData{
+			Messages:            message,
+			AddGenerationPrompt: true,
+			EosToken:            p.EosToken,
+		}
+		outputStr, err := executeTemplate(p.Template, data)
+		if err != nil {
+			return nil, err
+		}
+		templatedMessages[i] = outputStr
+	}
+	return p.RunPipeline(templatedMessages)
 }
 
 func (p *TextGenerationPipeline) RunPipeline(inputs []string) (*TextGenerationOutput, error) {

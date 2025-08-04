@@ -59,11 +59,14 @@ func LoadModel(path string, onnxFilename string, options *options.Options) (*Mod
 		return nil, err
 	}
 
+	// for generative models that don't have head dim defined in config (example Phi)
+	// infer from cache entries, only if HeadDim hasn't been initialized yet
 	if model.HeadDim == 0 {
 		for _, inputMeta := range model.InputsMeta {
 			if strings.HasPrefix(inputMeta.Name, "past_key") {
 				dims := inputMeta.Dimensions.ValuesInt()
 				model.HeadDim = dims[len(dims)-1]
+				break
 			}
 		}
 	}
@@ -217,8 +220,7 @@ func loadModelConfig(model *Model) error {
 				model.HeadDim = int(headDimValue)
 			} else {
 				return errors.New("num_key_value_heads is not a number")
-			} // read metadata, look for cache entry and take the correct dimension
-			// this has to happen outside of this because model input/output metadata not yet known
+			}
 		}
 
 		if vocabSize, exists := configMap["vocab_size"]; exists {

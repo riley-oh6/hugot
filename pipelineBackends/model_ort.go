@@ -222,6 +222,7 @@ func CreateGenerativeInputTensorsORT(batch *PipelineBatch, model *Model) error {
 	return nil
 }
 
+// CreateCacheORT initializes the KV cache. Cache entries have shape [batchSize, numKeyValueHeads, pastSequenceLength, headDim]
 func CreateCacheORT(batchSize, numLayers, numKeyValueHeads, maxSeqLen, headDim int) ([]ort.Value, error) {
 	cache := make([]ort.Value, numLayers*2)
 	tensorSize := batchSize * numKeyValueHeads * maxSeqLen * headDim
@@ -350,6 +351,7 @@ func argmax(logits [][][]float32) []int64 {
 	return output
 }
 
+// runGenerativeORTSessionOnBatch runs the generative loop for text generation
 func runGenerativeORTSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 	start := time.Now()
 	batchSize := int64(len(batch.Input))
