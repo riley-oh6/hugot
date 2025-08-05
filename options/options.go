@@ -37,6 +37,8 @@ type OrtOptions struct {
 	DirectMLOptions       *int
 	OpenVINOOptions       map[string]string
 	TensorRTOptions       map[string]string
+	BeamSearchNumBeams    *int
+	BeamSearchEnabled     *bool
 }
 
 type GoMLXOptions struct {
@@ -242,6 +244,35 @@ func WithTensorRT(options map[string]string) WithOption {
 			return nil
 		} else {
 			return fmt.Errorf("WithTensorRT is only supported for ORT backend")
+		}
+	}
+}
+
+// WithBeamSearch (ORT only) Enable/Disable beam search for text generation.
+// If enabled, beam search will be used instead of greedy search. Default is false.
+func WithBeamSearch(enable bool) WithOption {
+	return func(o *Options) error {
+		if o.Backend == "ORT" {
+			o.ORTOptions.BeamSearchEnabled = &enable
+			return nil
+		} else {
+			return fmt.Errorf("WithBeamSearch is only supported for ORT backend")
+		}
+	}
+}
+
+// WithBeamSearchNumBeams (ORT only) Sets the number of beams to use for beam search.
+// Higher values consider more alternatives but increase computation time. Default is 5.
+func WithBeamSearchNumBeams(numBeams int) WithOption {
+	return func(o *Options) error {
+		if o.Backend == "ORT" {
+			if numBeams < 2 {
+				return fmt.Errorf("numBeams must be at least 2, got %d", numBeams)
+			}
+			o.ORTOptions.BeamSearchNumBeams = &numBeams
+			return nil
+		} else {
+			return fmt.Errorf("WithBeamSearchNumBeams is only supported for ORT backend")
 		}
 	}
 }

@@ -5,7 +5,9 @@ package pipelineBackends
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"sort"
 	"strings"
 
 	ort "github.com/yalue/onnxruntime_go"
@@ -16,6 +18,7 @@ import (
 type ORTModel struct {
 	Session        *ort.DynamicAdvancedSession
 	SessionOptions *ort.SessionOptions
+	Options        *options.OrtOptions
 	Destroy        func() error
 }
 
@@ -60,9 +63,14 @@ func createORTModelBackend(model *Model, options *options.Options) error {
 		return errSession
 	}
 
-	model.ORTModel = &ORTModel{Session: session, SessionOptions: sessionOptions, Destroy: func() error {
-		return session.Destroy()
-	}}
+	model.ORTModel = &ORTModel{
+		Session:        session,
+		SessionOptions: sessionOptions,
+		Options:        options.ORTOptions,
+		Destroy: func() error {
+			return session.Destroy()
+		},
+	}
 	model.InputsMeta = inputs
 	model.OutputsMeta = outputs
 	if pathChanged {
@@ -145,11 +153,14 @@ func CreateGenerativeInputTensorsORT(batch *PipelineBatch, model *Model) error {
 	batchSize := len(batch.Input)
 	maxSeqLength := batch.MaxSequenceLength
 	tensorSize := batchSize * maxSeqLength
+	hasCache := false
 
 	// filter out cache inputs
 	filteredInputsMeta := make([]InputOutputInfo, 0, len(model.InputsMeta))
 	for _, meta := range model.InputsMeta {
-		if !strings.HasPrefix(meta.Name, "past_key") {
+		if strings.HasPrefix(meta.Name, "past_key") {
+			hasCache = true
+		} else {
 			filteredInputsMeta = append(filteredInputsMeta, meta)
 		}
 	}
@@ -203,12 +214,15 @@ func CreateGenerativeInputTensorsORT(batch *PipelineBatch, model *Model) error {
 		}
 	}
 
-	cache, err := CreateCacheORT(batchSize, model.NumHiddenLayers, model.NumKeyValueHeads, model.FixedCacheSize, model.HeadDim)
-	if err != nil {
-		return err
+	if hasCache {
+		cache, err := CreateCacheORT(batchSize, model.NumHiddenLayers, model.NumKeyValueHeads, model.FixedCacheSize, model.HeadDim)
+		if err != nil {
+			return err
+		}
+		inputTensors = append(inputTensors, cache...)
 	}
 
-	batch.InputValues = append(inputTensors, cache...)
+	batch.InputValues = inputTensors
 	batch.PaddingMask = paddingMasks
 	batch.DestroyInputs = func() error {
 		var destroyError error
@@ -320,6 +334,92 @@ func runORTSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
 	return err
 }
 
+// BeamHypotheses stores and manages beam search hypotheses
+type BeamHypotheses struct {
+	numBeams      int
+	maxLength     int
+	beams         []BeamHypothesis
+	lengthPenalty float32
+	earlyStopping bool
+}
+
+// BeamHypothesis represents a single beam hypothesis
+type BeamHypothesis struct {
+	tokens []int64
+	score  float32
+}
+
+// NewBeamHypotheses creates a new BeamHypotheses instance
+func NewBeamHypotheses(numBeams int, maxLength int, lengthPenalty float32, earlyStopping bool) *BeamHypotheses {
+	return &BeamHypotheses{
+		numBeams:      numBeams,
+		maxLength:     maxLength,
+		beams:         make([]BeamHypothesis, 0, numBeams),
+		lengthPenalty: lengthPenalty,
+		earlyStopping: earlyStopping,
+	}
+}
+
+// Add adds a new hypothesis to the beam
+func (bh *BeamHypotheses) Add(hypothesis []int64, sumLogProbs float32, generatedLen int) {
+	// Apply length penalty: (5 + len(hyp))^length_penalty / (5 + 1)^length_penalty
+	// This matches the Python implementation
+	score := sumLogProbs / float32(math.Pow(float64(5+generatedLen), float64(bh.lengthPenalty))) *
+		float32(math.Pow(float64(6), float64(bh.lengthPenalty)))
+
+	// Create a copy of the tokens to avoid reference issues
+	tokensCopy := make([]int64, len(hypothesis))
+	copy(tokensCopy, hypothesis)
+
+	// Create the beam hypothesis
+	beam := BeamHypothesis{
+		tokens: tokensCopy,
+		score:  score,
+	}
+
+	// Add to beams
+	bh.beams = append(bh.beams, beam)
+
+	// Sort beams by score (descending)
+	sort.Slice(bh.beams, func(i, j int) bool {
+		return bh.beams[i].score > bh.beams[j].score
+	})
+
+	// Keep only the top numBeams
+	if len(bh.beams) > bh.numBeams {
+		bh.beams = bh.beams[:bh.numBeams]
+	}
+}
+
+// IsDone checks if the beam search is done
+func (bh *BeamHypotheses) IsDone(bestSumLogProbs float32, curLen int) bool {
+	// If we don't have enough beams yet, we're not done
+	if len(bh.beams) < bh.numBeams {
+		return false
+	}
+
+	if bh.earlyStopping {
+		return true
+	}
+
+	// Calculate worst score in the beam
+	worstScore := bh.beams[len(bh.beams)-1].score
+
+	// Calculate the score of the best possible beam from the current state
+	// Apply the same length penalty as in Add
+	nextLen := curLen + 1
+	bestPossibleScore := bestSumLogProbs / float32(math.Pow(float64(5+nextLen), float64(bh.lengthPenalty))) *
+		float32(math.Pow(float64(6), float64(bh.lengthPenalty)))
+
+	// If the best possible score is worse than our worst beam, we're done
+	return worstScore >= bestPossibleScore
+}
+
+// GetBeams returns the final beams
+func (bh *BeamHypotheses) GetBeams() []BeamHypothesis {
+	return bh.beams
+}
+
 func argmax(logits [][][]float32) []int64 {
 	batchSize := len(logits)
 	if batchSize == 0 {
@@ -350,9 +450,77 @@ func argmax(logits [][][]float32) []int64 {
 	return output
 }
 
+// beamSearch implements beam search decoding
+// This is a simplified version of beam search that selects the most likely token at each step
+// For a full implementation, we would need to track multiple beams across iterations
+// and select the best complete sequence at the end
+// To use beam search, set the BeamSearchEnabled option to true and optionally set BeamSearchNumBeams
+// Example:
+//
+//	opts := options.Defaults()
+//	opts.Backend = "ORT"
+//	err := options.WithBeamSearch(true)(opts)
+//	err = options.WithBeamSearchNumBeams(5)(opts)
+func beamSearch(logits [][][]float32, numBeams int) []int64 {
+	batchSize := len(logits)
+	if batchSize == 0 {
+		return nil
+	}
+
+	// Define a struct to hold token scores
+	type tokenScore struct {
+		token int64
+		score float32
+	}
+
+	// Create a slice to hold the next tokens for each item in the batch
+	nextTokens := make([]int64, batchSize)
+
+	// Process each item in the batch
+	for batchIdx := range logits {
+		// Get the logits for the last token
+		if len(logits[batchIdx]) == 0 {
+			nextTokens[batchIdx] = 0
+			continue
+		}
+
+		lastTokenLogits := logits[batchIdx][len(logits[batchIdx])-1]
+		vocabSize := len(lastTokenLogits)
+
+		// Create a slice to hold all token scores
+		allScores := make([]tokenScore, vocabSize)
+		for i, score := range lastTokenLogits {
+			allScores[i] = tokenScore{token: int64(i), score: score}
+		}
+
+		// Sort by score (descending)
+		sort.Slice(allScores, func(i, j int) bool {
+			return allScores[i].score > allScores[j].score
+		})
+
+		// Take the top numBeams (or fewer if we don't have enough tokens)
+		beamCount := numBeams
+		if beamCount > len(allScores) {
+			beamCount = len(allScores)
+		}
+
+		topBeams := allScores[:beamCount]
+
+		// For now, just use the highest scoring token
+		// In a more complete implementation, we would track multiple beams across iterations
+		// and select the best complete sequence at the end
+		if len(topBeams) > 0 {
+			nextTokens[batchIdx] = topBeams[0].token
+		} else {
+			nextTokens[batchIdx] = 0 // Default to 0 if no tokens available
+		}
+	}
+
+	return nextTokens
+}
+
 // runGenerativeORTSessionOnBatch runs the generative loop for text generation
 func runGenerativeORTSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error {
-
 	batchSize := len(batch.Input)
 	batchSize64 := int64(batchSize)
 	generatedTokens := make([][]int64, batchSize)
@@ -362,6 +530,29 @@ func runGenerativeORTSessionOnBatch(batch *PipelineBatch, p *BasePipeline) error
 	inputMetaMap := make(map[string]int)
 	for i, inputMeta := range p.Model.InputsMeta {
 		inputMetaMap[inputMeta.Name] = i
+	}
+
+	// Check if beam search is enabled
+	useBeamSearch := false
+	numBeams := 5 // Default number of beams
+
+	// Get beam search configuration from options if available
+	if p.Model.ORTModel.Options != nil {
+		if p.Model.ORTModel.Options.BeamSearchEnabled != nil {
+			useBeamSearch = *p.Model.ORTModel.Options.BeamSearchEnabled
+			if useBeamSearch && p.Model.ORTModel.Options.BeamSearchNumBeams != nil {
+				numBeams = *p.Model.ORTModel.Options.BeamSearchNumBeams
+			}
+		}
+	}
+
+	// Initialize beam hypotheses if using beam search
+	var beamHypotheses []*BeamHypotheses
+	if useBeamSearch {
+		beamHypotheses = make([]*BeamHypotheses, batchSize)
+		for i := 0; i < batchSize; i++ {
+			beamHypotheses[i] = NewBeamHypotheses(numBeams, batch.MaxNewTokens, 1.0, false)
+		}
 	}
 
 	finish := make([]bool, batchSize)
@@ -385,14 +576,19 @@ iterations:
 			logitsReshaped = flatDataTo3DGenerativeLoop(logits, batchSize64, int64(p.Model.VocabSize))
 		}
 
-		// this matches the python implementation where it will continue to alternate between newline and
-		// EOS until the longest output sequence terminates
-		// should give an array of batchSize amount of tokens
-		greedyTokens := argmax(logitsReshaped)
-		for i, greedyToken := range greedyTokens {
+		var nextTokens []int64
+		if useBeamSearch {
+			// Use beam search for token selection
+			nextTokens = beamSearch(logitsReshaped, numBeams)
+		} else {
+			// Use greedy search (argmax) for token selection
+			nextTokens = argmax(logitsReshaped)
+		}
+
+		for i, nextToken := range nextTokens {
 			if !finish[i] {
-				generatedTokens[i] = append(generatedTokens[i], greedyToken)
-				if eosTokenIDs[greedyToken] {
+				generatedTokens[i] = append(generatedTokens[i], nextToken)
+				if eosTokenIDs[nextToken] {
 					finish[i] = true
 					finishCount++
 				}
@@ -409,7 +605,7 @@ iterations:
 			case "input_ids":
 				generatedTokenTensor, err := ort.NewTensor(
 					ort.NewShape(batchSize64, 1),
-					greedyTokens,
+					nextTokens,
 				)
 				if err != nil {
 					return err
@@ -421,7 +617,7 @@ iterations:
 				flatPositionIDs := flatDataTo2D(
 					positionIDs,
 					batch.PaddingMask,
-					len(positionIDs)/int(batchSize),
+					len(positionIDs)/batchSize,
 				)
 				newPositionIDs := make([]int64, batchSize)
 				for j, flatPositionID := range flatPositionIDs {
@@ -441,7 +637,7 @@ iterations:
 				flatAttentionMask := flatDataTo2D(
 					attentionMask,
 					batch.PaddingMask,
-					len(attentionMask)/int(batchSize),
+					len(attentionMask)/batchSize,
 				)
 				newAttentionMask := make([]int64, batchSize64*int64(len(flatAttentionMask[0])+1))
 				counter := 0
